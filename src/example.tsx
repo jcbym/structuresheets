@@ -2,7 +2,6 @@
 
 import React, { useState } from "react";
 import { useReactTable, getCoreRowModel, flexRender } from "@tanstack/react-table";
-import { signal } from "@preact/signals-core";
 
 // --- Data model types ---
 type CellValue = string | number | null;
