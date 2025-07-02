@@ -7,6 +7,7 @@ const initialState: SpreadsheetState = {
   mergedCells: new Map(),
   selectedCell: null,
   selectedRange: null,
+  selectedStructure: null,
   isDragging: false,
   dragStart: null,
   scrollTop: 0,
@@ -31,6 +32,7 @@ export const useSpreadsheetState = () => {
   const [mergedCells, setMergedCells] = React.useState<Map<string, MergedCell>>(new Map())
   const [selectedCell, setSelectedCell] = React.useState<{row: number, col: number} | null>(null)
   const [selectedRange, setSelectedRange] = React.useState<SelectionRange | null>(null)
+  const [selectedStructure, setSelectedStructure] = React.useState<Structure | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
   const [dragStart, setDragStart] = React.useState<Position | null>(null)
   const [scrollTop, setScrollTop] = React.useState(0)
@@ -54,6 +56,7 @@ export const useSpreadsheetState = () => {
     mergedCells,
     selectedCell,
     selectedRange,
+    selectedStructure,
     isDragging,
     dragStart,
     scrollTop,
@@ -76,6 +79,7 @@ export const useSpreadsheetState = () => {
     setMergedCells,
     setSelectedCell,
     setSelectedRange,
+    setSelectedStructure,
     setIsDragging,
     setDragStart,
     setScrollTop,

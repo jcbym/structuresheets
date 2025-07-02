@@ -13,7 +13,10 @@ import {
   isCellInRange,
   isTableHeader,
   getHeaderHeight,
-  getHeaderWidth
+  getHeaderWidth,
+  getColumnHeight,
+  isGhostedColumn,
+  getHeaderLevel
 } from '../../utils'
 import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE } from '../../constants'
 
@@ -24,6 +27,7 @@ interface SpreadsheetGridProps {
   mergedCells: Map<string, MergedCell>
   selectedCell: {row: number, col: number} | null
   selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null
+  selectedStructure: Structure | null
   scrollTop: number
   scrollLeft: number
   columnWidths: Map<number, number>
@@ -48,6 +52,7 @@ interface SpreadsheetGridProps {
   onHeaderHover: (row: number, col: number, isEntering: boolean) => void
   onScroll: (e: React.UIEvent<HTMLDivElement>) => void
   onResizeMouseDown: (type: 'column' | 'row', index: number, e: React.MouseEvent) => void
+  onAddColumn: (tableRow: number, tableCol: number, insertAfterCol: number) => void
   
   // Container ref
   containerRef: React.RefObject<HTMLDivElement>
@@ -59,6 +64,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   mergedCells,
   selectedCell,
   selectedRange,
+  selectedStructure,
   scrollTop,
   scrollLeft,
   columnWidths,
@@ -81,6 +87,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   onHeaderHover,
   onScroll,
   onResizeMouseDown,
+  onAddColumn,
   containerRef
 }) => {
   const viewportWidth = window.innerWidth
@@ -164,19 +171,33 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           overlayHeight += getRowHeight(r, rowHeights)
         }
 
+        // Check if this structure is selected
+        const isSelected = selectedStructure && (
+          (selectedStructure.type === 'cell' && 
+           structure.type === 'cell' && 
+           selectedStructure.position.row === structure.position.row && 
+           selectedStructure.position.col === structure.position.col) ||
+          (selectedStructure.type !== 'cell' && 
+           structure.type !== 'cell' && 
+           selectedStructure.startPosition.row === structure.startPosition.row && 
+           selectedStructure.startPosition.col === structure.startPosition.col &&
+           selectedStructure.endPosition.row === structure.endPosition.row && 
+           selectedStructure.endPosition.col === structure.endPosition.col)
+        )
+
         const borderColor = structure.type === 'cell' ? 'border-black' :
                            structure.type === 'array' ? 'border-blue-500' : 'border-green-500'
 
         overlays.push(
           <div
             key={`overlay-${key}`}
-            className={`absolute pointer-events-none border-2 ${borderColor}`}
+            className={`absolute pointer-events-none ${isSelected ? `border-4 ${borderColor}` : `border-2 ${borderColor}`}`}
             style={{
               left: overlayLeft,
               top: overlayTop,
               width: overlayWidth,
               height: overlayHeight,
-              zIndex: Z_INDEX.STRUCTURE_OVERLAY
+              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 1 : Z_INDEX.STRUCTURE_OVERLAY
             }}
             title={structure.name ? `${structure.type}: ${structure.name}` : structure.type}
           />
@@ -364,6 +385,58 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return rows
   }
 
+  // // Render add column button overlay
+  // const renderAddColumnButton = () => {
+  //   if (!showAddColumnButton || !hoveredHeaderCell) return null
+
+  //   const { row, col } = hoveredHeaderCell
+
+  //   // Check if the button position is visible in current viewport
+  //   if (row >= startRow && row < endRow && col >= startCol && col < endCol) {
+  //     const buttonWidth = 20
+  //     const buttonLeft = getColumnPosition(col, columnWidths)
+  //     const buttonTop = getRowPosition(row, rowHeights)
+
+  //     return (
+  //       <button
+  //         className="absolute bg-green-500 bg-opacity-100 border border-white flex items-center justify-center text-white font-bold text-sm hover:bg-opacity-90 transition-all duration-200"
+  //         onClick={() => {
+  //           // Find the table structure to add column to
+  //           for (const [key, structure] of structures) {
+  //             if (structure.type === 'table') {
+  //               const table = structure as any
+  //               const headerLevel = getHeaderLevel(row, table)
+                
+  //               // For both top-level and sub-level headers, add column after the hovered cell
+  //               if (headerLevel >= 0 && row >= table.startPosition.row && 
+  //                   row < table.startPosition.row + (table.headerRows || 1) &&
+  //                   col === hoveredHeaderCell?.col) {
+                  
+  //                 onAddColumn(table.position.row, table.position.col, col - 1)
+  //                 break
+  //               }
+  //             }
+  //           }
+  //         }}
+  //         style={{
+  //           left: buttonLeft - buttonWidth,
+  //           top: buttonTop,
+  //           width: buttonWidth,
+  //           height: getColumnHeight(row, col, structures),
+  //           minWidth: buttonWidth,
+  //           minHeight: getColumnHeight(row, col, structures),
+  //           zIndex: 50
+  //         }}
+  //         title="Add column"
+  //       >
+  //         +
+  //       </button>
+  //     )
+  //   }
+
+  //   return null
+  // }
+
   return (
     <div 
       ref={containerRef}
@@ -390,6 +463,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         
         {/* Structure overlays */}
         {renderStructureOverlays()}
+        
+        {/* Add column button overlay */}
+        {/* {renderAddColumnButton()} */}
       </div>
     </div>
   )

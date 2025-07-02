@@ -3,7 +3,7 @@ import { StructurePanelProps, Table } from '../../types'
 
 export const StructurePanel: React.FC<StructurePanelProps> = ({ 
   structures, 
-  selectedCell, 
+  selectedStructure, 
   onCreateStructure, 
   onUpdateTableHeaders 
 }) => {
@@ -12,31 +12,12 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   const [arrayRows, setArrayRows] = React.useState(1)
   const [arrayCols, setArrayCols] = React.useState(1)
 
-  const handleCreate = () => {
-    if (!selectedCell || !structureName.trim()) return
-    
-    const dimensions = structureType !== 'cell' ? { rows: arrayRows, cols: arrayCols } : undefined
-    onCreateStructure(structureType, structureName.trim(), dimensions)
-    setStructureName('')
-  }
-
-  const getStructureAtPosition = (row: number, col: number) => {
-    for (const [key, structure] of structures) {
-      if (structure.position.row === row && structure.position.col === col) {
-        return structure
-      }
-    }
-    return null
-  }
-
-  const currentStructure = selectedCell ? getStructureAtPosition(selectedCell.row, selectedCell.col) : null
-
-  if (currentStructure) {
-    const tableStructure = currentStructure.type === 'table' ? currentStructure as Table : null
+  if (selectedStructure) {
+    const tableStructure = selectedStructure.type === 'table' ? selectedStructure as Table : null
     
     return (
       <div className="h-full bg-white border-l border-gray-300 p-4 flex flex-col w-80">
-        <h3 className="font-bold mb-4 text-lg">{currentStructure.type}</h3>
+        <h3 className="font-bold mb-4 text-lg">{selectedStructure.type}</h3>
 
         {/* Table Header Options */}
         {tableStructure && (
@@ -48,8 +29,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   type="checkbox"
                   checked={tableStructure.hasHeaderRow || false}
                   onChange={(e) => onUpdateTableHeaders(
-                    currentStructure.position.row,
-                    currentStructure.position.col,
+                    selectedStructure.position.row,
+                    selectedStructure.position.col,
                     e.target.checked,
                     tableStructure.hasHeaderCol || false,
                     tableStructure.headerRows,
@@ -69,8 +50,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                     max="10"
                     value={tableStructure.headerRows || 1}
                     onChange={(e) => onUpdateTableHeaders(
-                      currentStructure.position.row,
-                      currentStructure.position.col,
+                      selectedStructure.position.row,
+                      selectedStructure.position.col,
                       tableStructure.hasHeaderRow || false,
                       tableStructure.hasHeaderCol || false,
                       parseInt(e.target.value) || 1,
@@ -86,8 +67,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   type="checkbox"
                   checked={tableStructure.hasHeaderCol || false}
                   onChange={(e) => onUpdateTableHeaders(
-                    currentStructure.position.row,
-                    currentStructure.position.col,
+                    selectedStructure.position.row,
+                    selectedStructure.position.col,
                     tableStructure.hasHeaderRow || false,
                     e.target.checked,
                     tableStructure.headerRows,
@@ -107,8 +88,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                     max="10"
                     value={tableStructure.headerCols || 1}
                     onChange={(e) => onUpdateTableHeaders(
-                      currentStructure.position.row,
-                      currentStructure.position.col,
+                      selectedStructure.position.row,
+                      selectedStructure.position.col,
                       tableStructure.hasHeaderRow || false,
                       tableStructure.hasHeaderCol || false,
                       tableStructure.headerRows,

@@ -91,7 +91,7 @@ export type ToolbarProps = {
 
 export type StructurePanelProps = {
   structures: Map<string, Structure>
-  selectedCell: {row: number, col: number} | null
+  selectedStructure: Structure | null
   onCreateStructure: (type: Structure['type'], name: string, dimensions?: {rows: number, cols: number}) => void
   onUpdateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
 }
@@ -111,6 +111,7 @@ export type SpreadsheetState = {
   mergedCells: Map<string, MergedCell>
   selectedCell: {row: number, col: number} | null
   selectedRange: SelectionRange | null
+  selectedStructure: Structure | null
   isDragging: boolean
   dragStart: Position | null
   scrollTop: number

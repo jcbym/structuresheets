@@ -124,14 +124,14 @@ export const EditableCell: React.FC<EditableCellProps> = ({
     
     if (isHeaderCell() && structure?.type === 'table') {
       // Use green background to match table border color
-      return { ...baseStyle, backgroundColor: '#10b981' }
+      return { ...baseStyle, backgroundColor: '#10b981', opacity: 0.8 }
     }
     
     return baseStyle
   }
 
   // Only show borders for individual cells and selection
-  const getBorderClass = (): string => {
+  const getDisplay = (): string => {
     if (isSelected) {
       return 'bg-blue-100' // Selection border
     }
@@ -140,7 +140,7 @@ export const EditableCell: React.FC<EditableCellProps> = ({
 
   return (
     <div 
-      className={`w-full h-full relative ${getBorderClass()}`}
+      className={`w-full h-full relative ${getDisplay()}`}
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
       onMouseUp={onMouseUp}

@@ -1,7 +1,7 @@
 import React from 'react'
 import { SpreadsheetGrid } from './spreadsheet/SpreadsheetGrid'
-import { Toolbar } from './toolbar/Toolbar'
-import { StructurePanel } from './panels/StructurePanel'
+import { Toolbar } from './ui/Toolbar'
+import { StructurePanel } from './ui/StructurePanel'
 import { ContextMenu } from './ui/ContextMenu'
 import { useSpreadsheetState } from '../hooks/useSpreadsheetState'
 import { useCellOperations } from '../hooks/useCellOperations'
@@ -78,12 +78,47 @@ export const App: React.FC = () => {
   const handleMouseDown = (row: number, col: number, e: React.MouseEvent) => {
     if (e.button !== 0) return // Only handle left-click
 
-    state.setSelectedCell({ row, col })
+    // Check if the clicked cell is part of a structure
+    const structure = getStructureAtPosition(row, col, state.structures)
     
-    e.preventDefault()
-    state.setIsDragging(true)
-    state.setDragStart({ row, col })
-    state.setSelectedRange(null)
+    if (structure) {
+      // Check if this structure is already selected
+      const isSameStructureSelected = state.selectedStructure && (
+        (state.selectedStructure.type === 'cell' && 
+         structure.type === 'cell' && 
+         state.selectedStructure.position.row === structure.position.row && 
+         state.selectedStructure.position.col === structure.position.col) ||
+        (state.selectedStructure.type !== 'cell' && 
+         structure.type !== 'cell' && 
+         state.selectedStructure.startPosition.row === structure.startPosition.row && 
+         state.selectedStructure.startPosition.col === structure.startPosition.col &&
+         state.selectedStructure.endPosition.row === structure.endPosition.row && 
+         state.selectedStructure.endPosition.col === structure.endPosition.col)
+      )
+
+      if (isSameStructureSelected) {
+        // Second click on already selected structure - start editing the cell
+        state.setSelectedCell({ row, col })
+        state.setShouldStartEditing({ row, col })
+        // Keep the structure selected
+      } else {
+        // First click on structure - select the structure
+        state.setSelectedStructure(structure)
+        state.setSelectedCell(null)
+        state.setShouldStartEditing(null)
+        state.setSelectedRange(null)
+      }
+    } else {
+      // Click on empty cell - clear structure selection and select cell normally
+      state.setSelectedStructure(null)
+      state.setSelectedCell({ row, col })
+      state.setShouldStartEditing(null)
+      
+      e.preventDefault()
+      state.setIsDragging(true)
+      state.setDragStart({ row, col })
+      state.setSelectedRange(null)
+    }
   }
 
   const handleMouseEnter = (row: number, col: number) => {
@@ -107,12 +142,106 @@ export const App: React.FC = () => {
 
   const handleHeaderHover = (row: number, col: number, isEntering: boolean) => {
     if (isEntering && isTableHeader(row, col, state.structures)) {
-      state.setHoveredHeaderCell({ row, col })
-      state.setShowAddColumnButton(true)
+      const structure = getStructureAtPosition(row, col, state.structures)
+      if (structure && structure.type === 'table') {
+        const table = structure as any
+        const headerLevel = getHeaderLevel(row, table)
+        
+        if (headerLevel >= 0) {
+          // Check if this cell is part of a merged cell
+          const mergedCell = state.mergedCells.get(`${row}-${col}`) || 
+            Array.from(state.mergedCells.values()).find(mc => 
+              row >= mc.startRow && row <= mc.endRow && 
+              col >= mc.startCol && col <= mc.endCol
+            )
+          let rightmostCol = col
+          
+          if (mergedCell) {
+            rightmostCol = mergedCell.endCol
+          }
+          
+          // Show button to the right of the rightmost cell
+          state.setHoveredHeaderCell({ row, col: rightmostCol + 1 })
+          state.setShowAddColumnButton(true)
+        }
+      }
     } else if (!isEntering) {
       state.setHoveredHeaderCell(null)
       state.setShowAddColumnButton(false)
     }
+  }
+
+  const handleAddColumn = (tableRow: number, tableCol: number, insertAfterCol: number) => {
+    const structureKey = `struct-${tableRow}-${tableCol}`
+    const structure = state.structures.get(structureKey)
+    
+    if (!structure || structure.type !== 'table') return
+    
+    const table = structure as any
+    const newDimensions = { 
+      rows: table.dimensions.rows, 
+      cols: table.dimensions.cols + 1 
+    }
+    
+    // Update table structure
+    const updatedTable = {
+      ...table,
+      dimensions: newDimensions,
+      endPosition: {
+        row: table.endPosition.row,
+        col: table.endPosition.col + 1
+      }
+    }
+    
+    // Update all cells in the table to reference the new structure
+    state.setStructures(prev => {
+      const newStructures = new Map(prev)
+      
+      // Remove old structure references for cells that will shift
+      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let c = insertAfterCol + 1; c <= table.endPosition.col; c++) {
+          newStructures.delete(`struct-${r}-${c}`)
+        }
+      }
+      
+      // Add the updated table structure
+      newStructures.set(structureKey, updatedTable)
+      
+      // Add structure references for all cells in the expanded table
+      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let c = table.startPosition.col; c <= table.endPosition.col + 1; c++) {
+          if (!(r === tableRow && c === tableCol)) {
+            newStructures.set(`struct-${r}-${c}`, updatedTable)
+          }
+        }
+      }
+      
+      return newStructures
+    })
+    
+    // Shift cell data for columns after the insertion point
+    state.setCellData(prev => {
+      const newData = new Map(prev)
+      
+      // Move data from right to left to avoid overwriting
+      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let c = table.endPosition.col; c > insertAfterCol; c--) {
+          const oldKey = `${r}-${c}`
+          const newKey = `${r}-${c + 1}`
+          const value = newData.get(oldKey)
+          if (value) {
+            newData.set(newKey, value)
+            newData.delete(oldKey)
+          }
+        }
+      }
+      
+      return newData
+    })
+    
+    // Hide the add column button
+    state.setShowAddColumnButton(false)
+    state.setHoveredHeaderCell(null)
   }
 
   const handleResizeMouseDown = (type: 'column' | 'row', index: number, e: React.MouseEvent) => {
@@ -247,6 +376,7 @@ export const App: React.FC = () => {
               mergedCells={state.mergedCells}
               selectedCell={state.selectedCell}
               selectedRange={state.selectedRange}
+              selectedStructure={state.selectedStructure}
               scrollTop={state.scrollTop}
               scrollLeft={state.scrollLeft}
               columnWidths={state.columnWidths}
@@ -269,6 +399,7 @@ export const App: React.FC = () => {
               onHeaderHover={handleHeaderHover}
               onScroll={handleScroll}
               onResizeMouseDown={handleResizeMouseDown}
+              onAddColumn={handleAddColumn}
               containerRef={containerRef}
             />
           </div>
@@ -278,7 +409,7 @@ export const App: React.FC = () => {
         <div className="flex-shrink-0">
           <StructurePanel
             structures={state.structures}
-            selectedCell={state.selectedCell}
+            selectedStructure={state.selectedStructure}
             onCreateStructure={createStructure}
             onUpdateTableHeaders={updateTableHeaders}
           />

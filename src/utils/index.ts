@@ -179,6 +179,69 @@ export const getNextCell = (row: number, col: number, direction: 'ArrowUp' | 'Ar
   return { row: newRow, col: newCol }
 }
 
+// Add column utilities
+export const getColumnHeight = (row: number, col: number, structures: Map<string, Structure>): number => {
+  // Find the table this column belongs to
+  for (const [key, structure] of structures) {
+    if (structure.type === 'table') {
+      const table = structure as Table
+      const headerLevel = getHeaderLevel(row, table)
+      
+      // Check if this position is for adding a column to this table
+      if (row >= table.startPosition.row && row <= table.endPosition.row &&
+          col <= table.endPosition.col + 1 && 
+          row < table.startPosition.row + (table.headerRows || 1)) {
+        
+        // For top-level headers, return full table height
+        if (headerLevel === 0) {
+          return (table.endPosition.row - table.startPosition.row + 1) * DEFAULT_CELL_HEIGHT
+        }
+        
+        // For sub-level headers, return height from current row to bottom of table
+        if (headerLevel > 0) {
+          return (table.endPosition.row - row + 1) * DEFAULT_CELL_HEIGHT
+        }
+        
+        // Default to full table height
+        return (table.endPosition.row - table.startPosition.row + 1) * DEFAULT_CELL_HEIGHT
+      }
+    }
+  }
+  
+  // Default to single cell height if no table found
+  return DEFAULT_CELL_HEIGHT
+}
+
+export const isGhostedColumn = (row: number, col: number, hoveredHeaderCell: {row: number, col: number} | null, structures: Map<string, Structure>): boolean => {
+  if (!hoveredHeaderCell) return false
+  
+  for (const [key, structure] of structures) {
+    if (structure.type === 'table') {
+      const table = structure as Table
+      const headerLevel = getHeaderLevel(hoveredHeaderCell.row, table)
+      
+      // Case 1: Ghosted column at end of table (top-level header)
+      if (row >= table.startPosition.row && 
+          row <= table.endPosition.row &&
+          col === table.endPosition.col + 1 &&
+          hoveredHeaderCell.col === table.endPosition.col + 1) {
+        return true
+      }
+      
+      // Case 2: Ghosted sub-column (sub-level header)
+      if (headerLevel > 0 && 
+          row >= table.startPosition.row && 
+          row <= table.endPosition.row &&
+          col === hoveredHeaderCell.col &&
+          hoveredHeaderCell.row >= table.startPosition.row && 
+          hoveredHeaderCell.row < table.startPosition.row + (table.headerRows || 1)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 // Validation utilities
 export const isValidPosition = (row: number, col: number): boolean => {
   return row >= 0 && row < MAX_ROWS && col >= 0 && col < MAX_COLS
