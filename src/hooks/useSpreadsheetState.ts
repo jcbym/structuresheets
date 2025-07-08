@@ -22,7 +22,7 @@ const initialState: SpreadsheetState = {
   resizeIndex: null,
   resizeStartPos: 0,
   resizeStartSize: 0,
-  shouldStartEditing: null,
+  startEditing: null,
 }
 
 export const useSpreadsheetState = () => {
@@ -47,7 +47,7 @@ export const useSpreadsheetState = () => {
   const [resizeIndex, setResizeIndex] = React.useState<number | null>(null)
   const [resizeStartPos, setResizeStartPos] = React.useState(0)
   const [resizeStartSize, setResizeStartSize] = React.useState(0)
-  const [shouldStartEditing, setShouldStartEditing] = React.useState<{row: number, col: number} | null>(null)
+  const [startEditing, setStartEditing] = React.useState<{row: number, col: number} | null>(null)
 
   return {
     // State values
@@ -71,7 +71,7 @@ export const useSpreadsheetState = () => {
     resizeIndex,
     resizeStartPos,
     resizeStartSize,
-    shouldStartEditing,
+    startEditing,
 
     // State setters
     setCellData,
@@ -94,6 +94,6 @@ export const useSpreadsheetState = () => {
     setResizeIndex,
     setResizeStartPos,
     setResizeStartSize,
-    setShouldStartEditing,
+    setStartEditing,
   }
 }

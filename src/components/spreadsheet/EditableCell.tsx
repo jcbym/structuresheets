@@ -9,7 +9,7 @@ export const EditableCell: React.FC<EditableCellProps> = ({
   onFocus, 
   onEnterPress, 
   onArrowKeyPress, 
-  shouldStartEditing, 
+  startEditing, 
   onEditingStarted, 
   structure, 
   onMouseDown, 
@@ -67,15 +67,15 @@ export const EditableCell: React.FC<EditableCellProps> = ({
     setCellValue(value)
   }, [value])
 
-  // Auto-start editing when shouldStartEditing is true
+  // Auto-start editing when startEditing is true
   React.useEffect(() => {
-    if (shouldStartEditing && isSelected) {
+    if (startEditing && isSelected) {
       setIsEditing(true)
       if (onEditingStarted) {
         onEditingStarted()
       }
     }
-  }, [shouldStartEditing, isSelected, onEditingStarted])
+  }, [startEditing, isSelected, onEditingStarted])
 
   // Check if this cell is a header in a table
   const isHeaderCell = (): boolean => {
@@ -125,6 +125,15 @@ export const EditableCell: React.FC<EditableCellProps> = ({
     if (isHeaderCell() && structure?.type === 'table') {
       // Use green background to match table border color
       return { ...baseStyle, backgroundColor: '#10b981', opacity: 0.8 }
+    }
+    
+    // Add transparent background colors for structure types
+    if (structure?.type === 'table') {
+      return { ...baseStyle, backgroundColor: 'rgba(34, 197, 94, 0.1)' } // Transparent light green
+    }
+    
+    if (structure?.type === 'array') {
+      return { ...baseStyle, backgroundColor: 'rgba(59, 130, 246, 0.1)' } // Transparent light blue
     }
     
     return baseStyle

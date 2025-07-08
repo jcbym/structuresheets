@@ -14,11 +14,11 @@ import {
   isTableHeader,
   getHeaderHeight,
   getHeaderWidth,
-  getColumnHeight,
-  isGhostedColumn,
-  getHeaderLevel
+  getHeaderLevel,
+  getStructureAtPosition,
+  getNextCell
 } from '../../utils'
-import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE } from '../../constants'
+import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE, MAX_ROWS } from '../../constants'
 
 interface SpreadsheetGridProps {
   // State
@@ -32,27 +32,41 @@ interface SpreadsheetGridProps {
   scrollLeft: number
   columnWidths: Map<number, number>
   rowHeights: Map<number, number>
-  shouldStartEditing: {row: number, col: number} | null
+  startEditing: {row: number, col: number} | null
   hoveredHeaderCell: {row: number, col: number} | null
   showAddColumnButton: boolean
   isResizing: boolean
   resizeType: 'column' | 'row' | null
   resizeIndex: number | null
+  isDragging: boolean
+  dragStart: {row: number, col: number} | null
+  resizeStartPos: number
+  resizeStartSize: number
+  
+  // State setters
+  setCellData: React.Dispatch<React.SetStateAction<Map<string, string>>>
+  setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>
+  setSelectedCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
+  setSelectedRange: React.Dispatch<React.SetStateAction<{start: {row: number, col: number}, end: {row: number, col: number}} | null>>
+  setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
+  setScrollTop: React.Dispatch<React.SetStateAction<number>>
+  setScrollLeft: React.Dispatch<React.SetStateAction<number>>
+  setStartEditing: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
+  setContextMenu: React.Dispatch<React.SetStateAction<{x: number, y: number} | null>>
+  setIsDragging: React.Dispatch<React.SetStateAction<boolean>>
+  setDragStart: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
+  setHoveredHeaderCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
+  setShowAddColumnButton: React.Dispatch<React.SetStateAction<boolean>>
+  setIsResizing: React.Dispatch<React.SetStateAction<boolean>>
+  setResizeType: React.Dispatch<React.SetStateAction<'column' | 'row' | null>>
+  setResizeIndex: React.Dispatch<React.SetStateAction<number | null>>
+  setResizeStartPos: React.Dispatch<React.SetStateAction<number>>
+  setResizeStartSize: React.Dispatch<React.SetStateAction<number>>
+  setColumnWidths: React.Dispatch<React.SetStateAction<Map<number, number>>>
+  setRowHeights: React.Dispatch<React.SetStateAction<Map<number, number>>>
   
   // Event handlers
   onCellUpdate: (row: number, col: number, value: string) => void
-  onCellFocus: (row: number, col: number) => void
-  onCellEnterPress: (row: number, col: number) => void
-  onArrowKeyNavigation: (row: number, col: number, direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => void
-  onEditingStarted: () => void
-  onMouseDown: (row: number, col: number, e: React.MouseEvent) => void
-  onMouseEnter: (row: number, col: number) => void
-  onMouseUp: () => void
-  onRightClick: (row: number, col: number, e: React.MouseEvent) => void
-  onHeaderHover: (row: number, col: number, isEntering: boolean) => void
-  onScroll: (e: React.UIEvent<HTMLDivElement>) => void
-  onResizeMouseDown: (type: 'column' | 'row', index: number, e: React.MouseEvent) => void
-  onAddColumn: (tableRow: number, tableCol: number, insertAfterCol: number) => void
   
   // Container ref
   containerRef: React.RefObject<HTMLDivElement>
@@ -69,25 +83,37 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   scrollLeft,
   columnWidths,
   rowHeights,
-  shouldStartEditing,
+  startEditing,
   hoveredHeaderCell,
   showAddColumnButton,
   isResizing,
   resizeType,
   resizeIndex,
+  isDragging,
+  dragStart,
+  resizeStartPos,
+  resizeStartSize,
+  setCellData,
+  setStructures,
+  setSelectedCell,
+  setSelectedRange,
+  setSelectedStructure,
+  setScrollTop,
+  setScrollLeft,
+  setStartEditing,
+  setContextMenu,
+  setIsDragging,
+  setDragStart,
+  setHoveredHeaderCell,
+  setShowAddColumnButton,
+  setIsResizing,
+  setResizeType,
+  setResizeIndex,
+  setResizeStartPos,
+  setResizeStartSize,
+  setColumnWidths,
+  setRowHeights,
   onCellUpdate,
-  onCellFocus,
-  onCellEnterPress,
-  onArrowKeyNavigation,
-  onEditingStarted,
-  onMouseDown,
-  onMouseEnter,
-  onMouseUp,
-  onRightClick,
-  onHeaderHover,
-  onScroll,
-  onResizeMouseDown,
-  onAddColumn,
   containerRef
 }) => {
   const viewportWidth = window.innerWidth
@@ -97,6 +123,343 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const visibleRows = calculateVisibleRows(scrollTop, viewportHeight, rowHeights)
   const { startCol, endCol } = visibleCols
   const { startRow, endRow } = visibleRows
+
+  // State for editing structure names
+  const [editingStructureName, setEditingStructureName] = React.useState<string | null>(null)
+  const [editingNameValue, setEditingNameValue] = React.useState('')
+
+  // Handle structure name editing
+  const handleStructureNameDoubleClick = (structure: Structure) => {
+    const structureKey = structure.type === 'cell' 
+      ? `struct-${structure.position.row}-${structure.position.col}`
+      : `struct-${structure.startPosition.row}-${structure.startPosition.col}`
+    
+    setEditingStructureName(structureKey)
+    setEditingNameValue(structure.name || '')
+  }
+
+  const handleStructureNameChange = (value: string) => {
+    setEditingNameValue(value)
+  }
+
+  const handleStructureNameSubmit = () => {
+    if (editingStructureName && editingNameValue.trim()) {
+      // Update the structure name
+      setStructures(prev => {
+        const newStructures = new Map(prev)
+        const structure = newStructures.get(editingStructureName)
+        
+        if (structure) {
+          const updatedStructure = { ...structure, name: editingNameValue.trim() }
+          
+          // Update the main structure
+          newStructures.set(editingStructureName, updatedStructure)
+          
+          // Update all related structure references for arrays and tables
+          if (structure.type !== 'cell') {
+            const { startPosition, endPosition } = structure
+            for (let r = startPosition.row; r <= endPosition.row; r++) {
+              for (let c = startPosition.col; c <= endPosition.col; c++) {
+                const key = `struct-${r}-${c}`
+                if (newStructures.has(key)) {
+                  newStructures.set(key, updatedStructure)
+                }
+              }
+            }
+          }
+          
+          // Update selected structure if it's the same one
+          if (selectedStructure && (
+            (selectedStructure.type === 'cell' && 
+             structure.type === 'cell' && 
+             selectedStructure.position.row === structure.position.row && 
+             selectedStructure.position.col === structure.position.col) ||
+            (selectedStructure.type !== 'cell' && 
+             structure.type !== 'cell' && 
+             selectedStructure.startPosition.row === structure.startPosition.row && 
+             selectedStructure.startPosition.col === structure.startPosition.col &&
+             selectedStructure.endPosition.row === structure.endPosition.row && 
+             selectedStructure.endPosition.col === structure.endPosition.col)
+          )) {
+            setSelectedStructure(updatedStructure)
+          }
+        }
+        
+        return newStructures
+      })
+    }
+    
+    setEditingStructureName(null)
+    setEditingNameValue('')
+  }
+
+  const handleStructureNameCancel = () => {
+    setEditingStructureName(null)
+    setEditingNameValue('')
+  }
+
+  // Event handlers
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLDivElement
+    setScrollTop(target.scrollTop)
+    setScrollLeft(target.scrollLeft)
+  }
+
+  const handleCellFocus = (row: number, col: number) => {
+    setSelectedCell({ row, col })
+  }
+
+  const handleCellEnterPress = (row: number, col: number) => {
+    const nextRow = row + 1
+    if (nextRow < MAX_ROWS) {
+      setSelectedCell({ row: nextRow, col })
+      setStartEditing({ row: nextRow, col })
+    }
+  }
+
+  const handleArrowKeyNavigation = (row: number, col: number, direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
+    const { row: newRow, col: newCol } = getNextCell(row, col, direction)
+    setSelectedCell({ row: newRow, col: newCol })
+    setStartEditing({ row: newRow, col: newCol })
+  }
+
+  const handleMouseDown = (row: number, col: number, e: React.MouseEvent) => {
+    if (e.button !== 0) return // Only handle left-click
+
+    // Check if the clicked cell is part of a structure
+    const structure = getStructureAtPosition(row, col, structures)
+    
+    if (structure) {
+      // Check if this structure is already selected
+      const isSameStructureSelected = selectedStructure && (
+        (selectedStructure.type === 'cell' && 
+         structure.type === 'cell' && 
+         selectedStructure.position.row === structure.position.row && 
+         selectedStructure.position.col === structure.position.col) ||
+        (selectedStructure.type !== 'cell' && 
+         structure.type !== 'cell' && 
+         selectedStructure.startPosition.row === structure.startPosition.row && 
+         selectedStructure.startPosition.col === structure.startPosition.col &&
+         selectedStructure.endPosition.row === structure.endPosition.row && 
+         selectedStructure.endPosition.col === structure.endPosition.col)
+      )
+
+      if (isSameStructureSelected) {
+        // Second click on already selected structure - start editing the cell
+        setSelectedCell({ row, col })
+        setStartEditing({ row, col })
+        // Keep the structure selected
+      } else {
+        // First click on structure - select the structure
+        setSelectedStructure(structure)
+        setSelectedCell(null)
+        setStartEditing(null)
+        setSelectedRange(null)
+      }
+    } else {
+      // Click on empty cell - clear structure selection and select cell normally
+      setSelectedStructure(null)
+      setSelectedCell({ row, col })
+      setStartEditing(null)
+      
+      e.preventDefault()
+      setIsDragging(true)
+      setDragStart({ row, col })
+      setSelectedRange(null)
+    }
+  }
+
+  const handleMouseEnter = (row: number, col: number) => {
+    if (isDragging && dragStart) {
+      setSelectedRange({
+        start: dragStart,
+        end: { row, col }
+      })
+    }
+  }
+
+  const handleMouseUp = () => {
+    setIsDragging(false)
+    setDragStart(null)
+  }
+
+  const handleRightClick = (row: number, col: number, e: React.MouseEvent) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  const handleHeaderHover = (row: number, col: number, isEntering: boolean) => {
+    if (isEntering && isTableHeader(row, col, structures)) {
+      const structure = getStructureAtPosition(row, col, structures)
+      if (structure && structure.type === 'table') {
+        const table = structure as any
+        const headerLevel = getHeaderLevel(row, table)
+        
+        if (headerLevel >= 0) {
+          // Check if this cell is part of a merged cell
+          const mergedCell = mergedCells.get(`${row}-${col}`) || 
+            Array.from(mergedCells.values()).find(mc => 
+              row >= mc.startRow && row <= mc.endRow && 
+              col >= mc.startCol && col <= mc.endCol
+            )
+          let rightmostCol = col
+          
+          if (mergedCell) {
+            rightmostCol = mergedCell.endCol
+          }
+          
+          // Show button to the right of the rightmost cell
+          setHoveredHeaderCell({ row, col: rightmostCol + 1 })
+          setShowAddColumnButton(true)
+        }
+      }
+    } else if (!isEntering) {
+      setHoveredHeaderCell(null)
+      setShowAddColumnButton(false)
+    }
+  }
+
+  const handleAddColumn = (tableRow: number, tableCol: number, insertAfterCol: number) => {
+    const structureKey = `struct-${tableRow}-${tableCol}`
+    const structure = structures.get(structureKey)
+    
+    if (!structure || structure.type !== 'table') return
+    
+    const table = structure as any
+    const newDimensions = { 
+      rows: table.dimensions.rows, 
+      cols: table.dimensions.cols + 1 
+    }
+    
+    // Update table structure
+    const updatedTable = {
+      ...table,
+      dimensions: newDimensions,
+      endPosition: {
+        row: table.endPosition.row,
+        col: table.endPosition.col + 1
+      }
+    }
+    
+    // Update all cells in the table to reference the new structure
+    setStructures(prev => {
+      const newStructures = new Map(prev)
+      
+      // Remove old structure references for cells that will shift
+      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let c = insertAfterCol + 1; c <= table.endPosition.col; c++) {
+          newStructures.delete(`struct-${r}-${c}`)
+        }
+      }
+      
+      // Add the updated table structure
+      newStructures.set(structureKey, updatedTable)
+      
+      // Add structure references for all cells in the expanded table
+      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let c = table.startPosition.col; c <= table.endPosition.col + 1; c++) {
+          if (!(r === tableRow && c === tableCol)) {
+            newStructures.set(`struct-${r}-${c}`, updatedTable)
+          }
+        }
+      }
+      
+      return newStructures
+    })
+    
+    // Shift cell data for columns after the insertion point
+    setCellData(prev => {
+      const newData = new Map(prev)
+      
+      // Move data from right to left to avoid overwriting
+      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let c = table.endPosition.col; c > insertAfterCol; c--) {
+          const oldKey = `${r}-${c}`
+          const newKey = `${r}-${c + 1}`
+          const value = newData.get(oldKey)
+          if (value) {
+            newData.set(newKey, value)
+            newData.delete(oldKey)
+          }
+        }
+      }
+      
+      return newData
+    })
+    
+    // Hide the add column button
+    setShowAddColumnButton(false)
+    setHoveredHeaderCell(null)
+  }
+
+  const handleResizeMouseDown = (type: 'column' | 'row', index: number, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    setIsResizing(true)
+    setResizeType(type)
+    setResizeIndex(index)
+    setResizeStartPos(type === 'column' ? e.clientX : e.clientY)
+    
+    const currentSize = type === 'column' 
+      ? columnWidths.get(index) || 82 
+      : rowHeights.get(index) || 32
+    setResizeStartSize(currentSize)
+  }
+
+  // Global mouse event handlers for resizing
+  React.useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsDragging(false)
+      setDragStart(null)
+      setIsResizing(false)
+      setResizeType(null)
+      setResizeIndex(null)
+    }
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (isResizing && resizeType && resizeIndex !== null) {
+        const currentPos = resizeType === 'column' ? e.clientX : e.clientY
+        const delta = currentPos - resizeStartPos
+        const newSize = Math.max(MIN_CELL_SIZE, resizeStartSize + delta)
+        
+        if (resizeType === 'column') {
+          setColumnWidths(prev => {
+            const newWidths = new Map(prev)
+            newWidths.set(resizeIndex!, newSize)
+            return newWidths
+          })
+        } else {
+          setRowHeights(prev => {
+            const newHeights = new Map(prev)
+            newHeights.set(resizeIndex!, newSize)
+            return newHeights
+          })
+        }
+      }
+    }
+
+    document.addEventListener('mouseup', handleGlobalMouseUp)
+    document.addEventListener('mousemove', handleGlobalMouseMove)
+    
+    return () => {
+      document.removeEventListener('mouseup', handleGlobalMouseUp)
+      document.removeEventListener('mousemove', handleGlobalMouseMove)
+    }
+  }, [
+    isResizing, 
+    resizeType, 
+    resizeIndex, 
+    resizeStartPos, 
+    resizeStartSize,
+    setIsDragging,
+    setDragStart,
+    setIsResizing,
+    setResizeType,
+    setResizeIndex,
+    setColumnWidths,
+    setRowHeights
+  ])
 
   // Render merged cell overlays
   const renderMergedCellOverlays = () => {
@@ -215,6 +578,140 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return overlays
   }
 
+  // Render structure name tabs
+  const renderStructureNameTabs = () => {
+    const tabs = []
+    const processedStructures = new Set<string>()
+
+    for (const [key, structure] of structures) {
+      if (processedStructures.has(key)) continue
+      if (!structure.name) continue // Only show tabs for named structures
+
+      let startPosition, endPosition
+      if (structure.type === 'cell') {
+        startPosition = endPosition = structure.position
+      } else {
+        startPosition = structure.startPosition
+        endPosition = structure.endPosition
+      }
+      
+      if (endPosition.row >= startRow && startPosition.row < endRow &&
+          endPosition.col >= startCol && startPosition.col < endCol) {
+        
+        // Check if this structure is selected
+        const isSelected = selectedStructure && (
+          (selectedStructure.type === 'cell' && 
+           structure.type === 'cell' && 
+           selectedStructure.position.row === structure.position.row && 
+           selectedStructure.position.col === structure.position.col) ||
+          (selectedStructure.type !== 'cell' && 
+           structure.type !== 'cell' && 
+           selectedStructure.startPosition.row === structure.startPosition.row && 
+           selectedStructure.startPosition.col === structure.startPosition.col &&
+           selectedStructure.endPosition.row === structure.endPosition.row && 
+           selectedStructure.endPosition.col === structure.endPosition.col)
+        )
+
+        // Only show name tab when structure is selected
+        if (isSelected) {
+          const overlayLeft = getColumnPosition(startPosition.col, columnWidths)
+          const overlayTop = getRowPosition(startPosition.row, rowHeights)
+          
+          // Calculate structure width
+          let structureWidth = 0
+          for (let c = startPosition.col; c <= endPosition.col; c++) {
+            structureWidth += getColumnWidth(c, columnWidths)
+          }
+          
+          // Check if this structure is being edited
+          const isEditing = editingStructureName === key
+          
+          // Calculate tab dimensions - constrain to structure width
+          const tabHeight = 24
+          const tabPadding = 2
+          const maxTabWidth = structureWidth
+          
+          // Use editing value if currently editing, otherwise use structure name
+          const displayText = isEditing ? editingNameValue : structure.name
+          const textWidth = displayText.length * 10 // Approximate character width
+          const minTabWidth = 40 // Minimum tab width for usability
+          const tabWidth = Math.min(Math.max(textWidth + tabPadding * 2, minTabWidth), maxTabWidth)
+          
+          // Position tab above the structure, extending from the top border
+          const tabLeft = overlayLeft
+          const tabTop = overlayTop - tabHeight
+          
+          // Choose tab color based on structure type
+          const tabBgColor = structure.type === 'cell' ? 'bg-black' :
+                            structure.type === 'array' ? 'bg-blue-500' : 'bg-green-500'
+          
+          tabs.push(
+            <div
+              key={`name-tab-${key}`}
+              className={`absolute ${tabBgColor} text-white text-xs font-medium flex items-center justify-center border-t-2 border-l-2 border-r-2 ${
+                structure.type === 'cell' ? 'border-black' :
+                structure.type === 'array' ? 'border-blue-500' : 'border-green-500'
+              }`}
+              style={{
+                left: tabLeft,
+                top: tabTop,
+                width: tabWidth,
+                height: tabHeight,
+                zIndex: Z_INDEX.STRUCTURE_NAME_TAB,
+                pointerEvents: 'auto'
+              }}
+              title={structure.name} // Show full name on hover
+              onDoubleClick={() => handleStructureNameDoubleClick(structure)}
+            >
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editingNameValue}
+                  onChange={(e) => handleStructureNameChange(e.target.value)}
+                  onBlur={handleStructureNameSubmit}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleStructureNameSubmit()
+                    } else if (e.key === 'Escape') {
+                      handleStructureNameCancel()
+                    }
+                  }}
+                  autoFocus
+                  className="bg-transparent text-white text-xs font-medium outline-none border-none w-full text-center"
+                  style={{
+                    paddingLeft: tabPadding,
+                    paddingRight: tabPadding
+                  }}
+                />
+              ) : (
+                <span 
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    paddingLeft: tabPadding,
+                    paddingRight: tabPadding
+                  }}
+                >
+                  {structure.name}
+                </span>
+              )}
+            </div>
+          )
+        }
+
+        // Mark all cells of this structure as processed
+        for (let r = startPosition.row; r <= endPosition.row; r++) {
+          for (let c = startPosition.col; c <= endPosition.col; c++) {
+            processedStructures.add(`struct-${r}-${c}`)
+          }
+        }
+      }
+    }
+
+    return tabs
+  }
+
   // Render column headers
   const renderColumnHeaders = () => {
     const headers = []
@@ -258,7 +755,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           {/* Column resize handle */}
           <div
             className="absolute right-0 top-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-500"
-            onMouseDown={(e) => onResizeMouseDown('column', colIndex, e)}
+            onMouseDown={(e) => handleResizeMouseDown('column', colIndex, e)}
             style={{
               marginRight: '-2px',
               zIndex: Z_INDEX.RESIZE_HANDLE
@@ -296,7 +793,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           {/* Row resize handle */}
           <div
             className="absolute bottom-0 left-0 w-full h-1 cursor-row-resize bg-transparent hover:bg-blue-500"
-            onMouseDown={(e) => onResizeMouseDown('row', rowIndex, e)}
+            onMouseDown={(e) => handleResizeMouseDown('row', rowIndex, e)}
             style={{
               marginBottom: '-2px',
               zIndex: Z_INDEX.RESIZE_HANDLE
@@ -346,14 +843,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               zIndex: mergedCell ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
             }}
             onMouseEnter={() => {
-              onMouseEnter(rowIndex, colIndex)
+              handleMouseEnter(rowIndex, colIndex)
               if (isTableHeader(rowIndex, colIndex, structures)) {
-                onHeaderHover(rowIndex, colIndex, true)
+                handleHeaderHover(rowIndex, colIndex, true)
               }
             }}
             onMouseLeave={() => {
               if (isTableHeader(rowIndex, colIndex, structures)) {
-                onHeaderHover(rowIndex, colIndex, false)
+                handleHeaderHover(rowIndex, colIndex, false)
               }
             }}
           >
@@ -361,17 +858,17 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               value={mergedCell ? mergedCell.value : cellData.get(`${rowIndex}-${colIndex}`) || ''}
               onChange={(value) => onCellUpdate(rowIndex, colIndex, value)}
               isSelected={isSelected}
-              onFocus={() => onCellFocus(rowIndex, colIndex)}
-              onEnterPress={() => onCellEnterPress(rowIndex, colIndex)}
-              onArrowKeyPress={(direction) => onArrowKeyNavigation(rowIndex, colIndex, direction)}
-              shouldStartEditing={shouldStartEditing?.row === rowIndex && shouldStartEditing?.col === colIndex}
-              onEditingStarted={onEditingStarted}
+              onFocus={() => handleCellFocus(rowIndex, colIndex)}
+              onEnterPress={() => handleCellEnterPress(rowIndex, colIndex)}
+              onArrowKeyPress={(direction) => handleArrowKeyNavigation(rowIndex, colIndex, direction)}
+              startEditing={startEditing?.row === rowIndex && startEditing?.col === colIndex}
+              onEditingStarted={() => setStartEditing(null)}
               structure={structure}
-              onMouseDown={(e) => onMouseDown(rowIndex, colIndex, e)}
-              onMouseEnter={() => onMouseEnter(rowIndex, colIndex)}
-              onMouseUp={onMouseUp}
-              onRightClick={(e) => onRightClick(rowIndex, colIndex, e)}
-              onHeaderHover={(isEntering) => onHeaderHover(rowIndex, colIndex, isEntering)}
+              onMouseDown={(e) => handleMouseDown(rowIndex, colIndex, e)}
+              onMouseEnter={() => handleMouseEnter(rowIndex, colIndex)}
+              onMouseUp={handleMouseUp}
+              onRightClick={(e) => handleRightClick(rowIndex, colIndex, e)}
+              onHeaderHover={(isEntering) => handleHeaderHover(rowIndex, colIndex, isEntering)}
               row={rowIndex}
               col={colIndex}
               isMergedCell={!!mergedCell}
@@ -442,7 +939,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       ref={containerRef}
       className="overflow-auto h-full w-full rounded-lg"
       style={{ position: 'relative' }}
-      onScroll={onScroll}
+      onScroll={handleScroll}
     >
       {/* Virtual container to enable scrolling */}
       <div
@@ -463,6 +960,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         
         {/* Structure overlays */}
         {renderStructureOverlays()}
+        
+        {/* Structure name tabs */}
+        {renderStructureNameTabs()}
         
         {/* Add column button overlay */}
         {/* {renderAddColumnButton()} */}

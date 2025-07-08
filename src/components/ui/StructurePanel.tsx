@@ -12,12 +12,33 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   const [arrayRows, setArrayRows] = React.useState(1)
   const [arrayCols, setArrayCols] = React.useState(1)
 
-  if (selectedStructure) {
-    const tableStructure = selectedStructure.type === 'table' ? selectedStructure as Table : null
+  // Get the current structure from the structures map to ensure we have the latest version
+  const currentStructure = React.useMemo(() => {
+    if (!selectedStructure) return null
+    
+    // Get the structure key and fetch the latest version from the structures map
+    const structureKey = `struct-${selectedStructure.position.row}-${selectedStructure.position.col}`
+    return structures.get(structureKey) || selectedStructure
+  }, [selectedStructure, structures])
+
+  if (currentStructure) {
+    const tableStructure = currentStructure.type === 'table' ? currentStructure as Table : null
     
     return (
       <div className="h-full bg-white border-l border-gray-300 p-4 flex flex-col w-80">
-        <h3 className="font-bold mb-4 text-lg">{selectedStructure.type}</h3>
+        <h3 className="font-bold mb-4 text-lg capitalize">{currentStructure.type}</h3>
+        
+        {/* Structure Info */}
+        <div className="mb-4 p-3 bg-gray-50 rounded">
+          <h4 className="font-semibold mb-2 text-sm">Structure Info</h4>
+          <div className="text-xs space-y-1">
+            <div>Position: ({currentStructure.position.row}, {currentStructure.position.col})</div>
+            {currentStructure.name && <div>Name: {currentStructure.name}</div>}
+            {(currentStructure.type === 'array' || currentStructure.type === 'table') && 'dimensions' in currentStructure && (
+              <div>Size: {currentStructure.dimensions.rows} × {currentStructure.dimensions.cols}</div>
+            )}
+          </div>
+        </div>
 
         {/* Table Header Options */}
         {tableStructure && (
@@ -29,8 +50,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   type="checkbox"
                   checked={tableStructure.hasHeaderRow || false}
                   onChange={(e) => onUpdateTableHeaders(
-                    selectedStructure.position.row,
-                    selectedStructure.position.col,
+                    currentStructure.position.row,
+                    currentStructure.position.col,
                     e.target.checked,
                     tableStructure.hasHeaderCol || false,
                     tableStructure.headerRows,
@@ -50,8 +71,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                     max="10"
                     value={tableStructure.headerRows || 1}
                     onChange={(e) => onUpdateTableHeaders(
-                      selectedStructure.position.row,
-                      selectedStructure.position.col,
+                      currentStructure.position.row,
+                      currentStructure.position.col,
                       tableStructure.hasHeaderRow || false,
                       tableStructure.hasHeaderCol || false,
                       parseInt(e.target.value) || 1,
@@ -67,8 +88,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   type="checkbox"
                   checked={tableStructure.hasHeaderCol || false}
                   onChange={(e) => onUpdateTableHeaders(
-                    selectedStructure.position.row,
-                    selectedStructure.position.col,
+                    currentStructure.position.row,
+                    currentStructure.position.col,
                     tableStructure.hasHeaderRow || false,
                     e.target.checked,
                     tableStructure.headerRows,
@@ -88,8 +109,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                     max="10"
                     value={tableStructure.headerCols || 1}
                     onChange={(e) => onUpdateTableHeaders(
-                      selectedStructure.position.row,
-                      selectedStructure.position.col,
+                      currentStructure.position.row,
+                      currentStructure.position.col,
                       tableStructure.hasHeaderRow || false,
                       tableStructure.hasHeaderCol || false,
                       tableStructure.headerRows,

@@ -52,14 +52,14 @@ export type ContextMenuProps = {
   onClose: () => void
   onMergeCells: () => void
   onUnmergeCells: () => void
-  onCreateArray: () => void
-  onCreateTable: () => void
-  onAddColumnHeaderLevel: () => void
-  onAddRowHeaderLevel: () => void
+  selectedCell: {row: number, col: number} | null
+  setContextMenu: React.Dispatch<React.SetStateAction<{x: number, y: number} | null>>
+  getStructureAtPositionSafe: (row: number, col: number) => Structure | undefined
+  updateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
+  createStructureFromToolbar: (type: Structure['type']) => void
   canMerge: boolean
   canUnmerge: boolean
   canCreateStructures: boolean
-  canAddHeaderLevels: boolean
 }
 
 export type EditableCellProps = {
@@ -69,7 +69,7 @@ export type EditableCellProps = {
   onFocus: () => void
   onEnterPress?: () => void
   onArrowKeyPress?: (direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => void
-  shouldStartEditing?: boolean
+  startEditing?: boolean
   onEditingStarted?: () => void
   structure?: Structure
   onMouseDown?: (e: React.MouseEvent) => void
@@ -126,5 +126,5 @@ export type SpreadsheetState = {
   resizeIndex: number | null
   resizeStartPos: number
   resizeStartSize: number
-  shouldStartEditing: {row: number, col: number} | null
+  startEditing: {row: number, col: number} | null
 }
