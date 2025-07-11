@@ -37,12 +37,15 @@ interface SpreadsheetGridProps {
   hoveredHeaderCell: {row: number, col: number} | null
   showAddColumnButton: boolean
   isResizing: boolean
-  resizeType: 'column' | 'row' | null
+  resizeType: 'column' | 'row' | 'structure' | null
   resizeIndex: number | null
   isDragging: boolean
   dragStart: {row: number, col: number} | null
   resizeStartPos: number
   resizeStartSize: number
+  isResizingStructure: boolean
+  structureResizeDirection: 'left' | 'right' | 'top' | 'bottom' | 'corner' | null
+  structureResizeStartDimensions: { rows: number, cols: number } | null
   
   // State setters
   setCellData: React.Dispatch<React.SetStateAction<Map<string, string>>>
@@ -60,10 +63,13 @@ interface SpreadsheetGridProps {
   setHoveredHeaderCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
   setShowAddColumnButton: React.Dispatch<React.SetStateAction<boolean>>
   setIsResizing: React.Dispatch<React.SetStateAction<boolean>>
-  setResizeType: React.Dispatch<React.SetStateAction<'column' | 'row' | null>>
+  setResizeType: React.Dispatch<React.SetStateAction<'column' | 'row' | 'structure' | null>>
   setResizeIndex: React.Dispatch<React.SetStateAction<number | null>>
   setResizeStartPos: React.Dispatch<React.SetStateAction<number>>
   setResizeStartSize: React.Dispatch<React.SetStateAction<number>>
+  setIsResizingStructure: React.Dispatch<React.SetStateAction<boolean>>
+  setStructureResizeDirection: React.Dispatch<React.SetStateAction<'left' | 'right' | 'top' | 'bottom' | 'corner' | null>>
+  setStructureResizeStartDimensions: React.Dispatch<React.SetStateAction<{ rows: number, cols: number } | null>>
   setColumnWidths: React.Dispatch<React.SetStateAction<Map<number, number>>>
   setRowHeights: React.Dispatch<React.SetStateAction<Map<number, number>>>
   
@@ -96,6 +102,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   dragStart,
   resizeStartPos,
   resizeStartSize,
+  isResizingStructure,
+  structureResizeDirection,
+  structureResizeStartDimensions,
+  setIsResizingStructure,
+  setStructureResizeDirection,
+  setStructureResizeStartDimensions,
   setCellData,
   setStructures,
   setSelectedCell,
@@ -134,14 +146,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   // Handle structure name editing
   const handleStructureNameDoubleClick = (structure: Structure) => {
-    let structureKey: string
-    if (structure.type === 'cell' || structure.type === 'column') {
-      structureKey = `struct-${structure.position.row}-${structure.position.col}`
-    } else {
-      structureKey = `struct-${structure.startPosition.row}-${structure.startPosition.col}`
-    }
-    
-    setEditingStructureName(structureKey)
+    setEditingStructureName(structure.id)
     setEditingNameValue(structure.name || '')
   }
 
@@ -159,41 +164,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         if (structure) {
           const updatedStructure = { ...structure, name: editingNameValue.trim() }
           
-          // Update the main structure
+          // Update the main structure using its UUID
           newStructures.set(editingStructureName, updatedStructure)
           
-          // Update all related structure references for arrays and tables
-          if (structure.type === 'array' || structure.type === 'table') {
-            const { startPosition, endPosition } = structure
-            for (let r = startPosition.row; r <= endPosition.row; r++) {
-              for (let c = startPosition.col; c <= endPosition.col; c++) {
-                const key = `struct-${r}-${c}`
-                if (newStructures.has(key)) {
-                  newStructures.set(key, updatedStructure)
-                }
-              }
-            }
-          }
-          
           // Update selected structure if it's the same one
-          if (selectedStructure && (
-            (selectedStructure.type === 'cell' && 
-             structure.type === 'cell' && 
-             selectedStructure.position.row === structure.position.row && 
-             selectedStructure.position.col === structure.position.col) ||
-            (selectedStructure.type === 'column' && 
-             structure.type === 'column' && 
-             selectedStructure.position.row === structure.position.row && 
-             selectedStructure.position.col === structure.position.col) ||
-            ((selectedStructure.type === 'array' || selectedStructure.type === 'table') && 
-             (structure.type === 'array' || structure.type === 'table') && 
-             'startPosition' in selectedStructure && 'endPosition' in selectedStructure &&
-             'startPosition' in structure && 'endPosition' in structure &&
-             selectedStructure.startPosition.row === structure.startPosition.row && 
-             selectedStructure.startPosition.col === structure.startPosition.col &&
-             selectedStructure.endPosition.row === structure.endPosition.row && 
-             selectedStructure.endPosition.col === structure.endPosition.col)
-          )) {
+          if (selectedStructure && selectedStructure.id === structure.id) {
             setSelectedStructure(updatedStructure)
           }
         }
@@ -378,8 +353,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   }
 
   const handleAddColumn = (tableRow: number, tableCol: number, insertAfterCol: number) => {
-    const structureKey = `struct-${tableRow}-${tableCol}`
-    const structure = structures.get(structureKey)
+    // Find the table structure at the given position
+    const structure = getStructureAtPosition(tableRow, tableCol, structures)
     
     if (!structure || structure.type !== 'table') return
     
@@ -399,29 +374,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       }
     }
     
-    // Update all cells in the table to reference the new structure
+    // Update the table structure using its UUID
     setStructures(prev => {
       const newStructures = new Map(prev)
-      
-      // Remove old structure references for cells that will shift
-      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
-        for (let c = insertAfterCol + 1; c <= table.endPosition.col; c++) {
-          newStructures.delete(`struct-${r}-${c}`)
-        }
-      }
-      
-      // Add the updated table structure
-      newStructures.set(structureKey, updatedTable)
-      
-      // Add structure references for all cells in the expanded table
-      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
-        for (let c = table.startPosition.col; c <= table.endPosition.col + 1; c++) {
-          if (!(r === tableRow && c === tableCol)) {
-            newStructures.set(`struct-${r}-${c}`, updatedTable)
-          }
-        }
-      }
-      
+      newStructures.set(table.id, updatedTable)
       return newStructures
     })
     
@@ -465,6 +421,25 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setResizeStartSize(currentSize)
   }
 
+  // Handle structure resize mouse down
+  const handleStructureResizeMouseDown = (direction: 'left' | 'right' | 'top' | 'bottom' | 'corner', e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    if (!selectedStructure || selectedStructure.type === 'cell' || selectedStructure.type === 'column') {
+      return // Only allow resizing for arrays and tables
+    }
+
+    setIsResizingStructure(true)
+    setStructureResizeDirection(direction)
+    setResizeStartPos(direction === 'bottom' ? e.clientY : e.clientX)
+    
+    // Store the current dimensions
+    if ('dimensions' in selectedStructure) {
+      setStructureResizeStartDimensions(selectedStructure.dimensions)
+    }
+  }
+
   // Global mouse event handlers for resizing
   React.useEffect(() => {
     const handleGlobalMouseUp = () => {
@@ -473,6 +448,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       setIsResizing(false)
       setResizeType(null)
       setResizeIndex(null)
+      setIsResizingStructure(false)
+      setStructureResizeDirection(null)
+      setStructureResizeStartDimensions(null)
     }
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
@@ -495,6 +473,113 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           })
         }
       }
+
+      // Handle structure resizing
+      if (isResizingStructure && structureResizeDirection && structureResizeStartDimensions && selectedStructure) {
+        if (selectedStructure.type === 'cell' || selectedStructure.type === 'column') return
+
+        const currentPos = structureResizeDirection === 'bottom' ? e.clientY : e.clientX
+        const delta = currentPos - resizeStartPos
+        
+        // Calculate new dimensions based on resize direction
+        let newRows = structureResizeStartDimensions.rows
+        let newCols = structureResizeStartDimensions.cols
+        
+        if (structureResizeDirection === 'left' || structureResizeDirection === 'right' || structureResizeDirection === 'corner') {
+          // Calculate how many columns to add/remove based on pixel delta
+          const avgColumnWidth = 82 // Default column width
+          const columnDelta = Math.round(delta / avgColumnWidth)
+          
+          if (structureResizeDirection === 'left') {
+            // For left edge, negative delta means expanding (adding columns to the left)
+            newCols = Math.max(1, structureResizeStartDimensions.cols - columnDelta)
+          } else {
+            // For right edge and corner, positive delta means expanding
+            newCols = Math.max(1, structureResizeStartDimensions.cols + columnDelta)
+          }
+        }
+        
+        if (structureResizeDirection === 'top' || structureResizeDirection === 'bottom' || structureResizeDirection === 'corner') {
+          // Calculate how many rows to add/remove based on pixel delta
+          const avgRowHeight = 32 // Default row height
+          const rowDelta = Math.round(delta / avgRowHeight)
+          
+          if (structureResizeDirection === 'top') {
+            // For top edge, negative delta means expanding (adding rows to the top)
+            newRows = Math.max(1, structureResizeStartDimensions.rows - rowDelta)
+          } else {
+            // For bottom edge and corner, positive delta means expanding
+            newRows = Math.max(1, structureResizeStartDimensions.rows + rowDelta)
+          }
+        }
+
+        // Only update if dimensions actually changed
+        if (newRows !== selectedStructure.dimensions.rows || newCols !== selectedStructure.dimensions.cols) {
+          const startPosition = selectedStructure.startPosition
+          const newEndPosition = {
+            row: startPosition.row + newRows - 1,
+            col: startPosition.col + newCols - 1
+          }
+
+          // Create updated structure
+          const updatedStructure = {
+            ...selectedStructure,
+            dimensions: { rows: newRows, cols: newCols },
+            endPosition: newEndPosition
+          }
+
+          // Update arrays for tables or cells for arrays
+          if (selectedStructure.type === 'table') {
+            const arrays = []
+            for (let r = 0; r < newRows; r++) {
+              const rowCells = []
+              for (let c = 0; c < newCols; c++) {
+                const cellRow = startPosition.row + r
+                const cellCol = startPosition.col + c
+                rowCells.push({
+                  type: 'cell' as const,
+                  position: { row: cellRow, col: cellCol },
+                  value: cellData.get(`${cellRow}-${cellCol}`) || ''
+                })
+              }
+              
+              arrays.push({
+                type: 'array' as const,
+                position: { row: startPosition.row + r, col: startPosition.col },
+                startPosition: { row: startPosition.row + r, col: startPosition.col },
+                endPosition: { row: startPosition.row + r, col: startPosition.col + newCols - 1 },
+                cells: rowCells,
+                dimensions: { rows: 1, cols: newCols }
+              })
+            }
+            ;(updatedStructure as any).arrays = arrays
+          } else if (selectedStructure.type === 'array') {
+            const cells = []
+            for (let r = 0; r < newRows; r++) {
+              for (let c = 0; c < newCols; c++) {
+                const cellRow = startPosition.row + r
+                const cellCol = startPosition.col + c
+                cells.push({
+                  type: 'cell' as const,
+                  position: { row: cellRow, col: cellCol },
+                  value: cellData.get(`${cellRow}-${cellCol}`) || ''
+                })
+              }
+            }
+            ;(updatedStructure as any).cells = cells
+          }
+
+          // Update structures map using UUID
+          setStructures(prev => {
+            const newStructures = new Map(prev)
+            newStructures.set(selectedStructure.id, updatedStructure)
+            return newStructures
+          })
+
+          // Update selected structure
+          setSelectedStructure(updatedStructure)
+        }
+      }
     }
 
     document.addEventListener('mouseup', handleGlobalMouseUp)
@@ -510,13 +595,23 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     resizeIndex, 
     resizeStartPos, 
     resizeStartSize,
+    isResizingStructure,
+    structureResizeDirection,
+    structureResizeStartDimensions,
+    selectedStructure,
+    cellData,
     setIsDragging,
     setDragStart,
     setIsResizing,
     setResizeType,
     setResizeIndex,
+    setIsResizingStructure,
+    setStructureResizeDirection,
+    setStructureResizeStartDimensions,
     setColumnWidths,
-    setRowHeights
+    setRowHeights,
+    setStructures,
+    setSelectedStructure
   ])
 
   // Render merged cell overlays
@@ -630,12 +725,103 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           />
         )
 
-        // Mark all cells of this structure as processed
-        for (let r = startPosition.row; r <= endPosition.row; r++) {
-          for (let c = startPosition.col; c <= endPosition.col; c++) {
-            processedStructures.add(`struct-${r}-${c}`)
-          }
+        // Add invisible resize areas for selected structures (arrays and tables only)
+        if (isSelected && (structure.type === 'array' || structure.type === 'table')) {
+          const edgeWidth = 4 // Width of the draggable edge area
+          
+          // Left edge resize area
+          overlays.push(
+            <div
+              key={`resize-left-${key}`}
+              className="absolute cursor-ew-resize"
+              style={{
+                left: overlayLeft,
+                top: overlayTop,
+                width: edgeWidth,
+                height: overlayHeight,
+                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                pointerEvents: 'auto'
+              }}
+              onMouseDown={(e) => handleStructureResizeMouseDown('left', e)}
+              title="Resize horizontally"
+            />
+          )
+          
+          // Right edge resize area
+          overlays.push(
+            <div
+              key={`resize-right-${key}`}
+              className="absolute cursor-ew-resize"
+              style={{
+                left: overlayLeft + overlayWidth - edgeWidth,
+                top: overlayTop,
+                width: edgeWidth,
+                height: overlayHeight,
+                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                pointerEvents: 'auto'
+              }}
+              onMouseDown={(e) => handleStructureResizeMouseDown('right', e)}
+              title="Resize horizontally"
+            />
+          )
+          
+          // Top edge resize area
+          overlays.push(
+            <div
+              key={`resize-top-${key}`}
+              className="absolute cursor-ns-resize"
+              style={{
+                left: overlayLeft,
+                top: overlayTop,
+                width: overlayWidth,
+                height: edgeWidth,
+                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                pointerEvents: 'auto'
+              }}
+              onMouseDown={(e) => handleStructureResizeMouseDown('top', e)}
+              title="Resize vertically"
+            />
+          )
+          
+          // Bottom edge resize area
+          overlays.push(
+            <div
+              key={`resize-bottom-${key}`}
+              className="absolute cursor-ns-resize"
+              style={{
+                left: overlayLeft,
+                top: overlayTop + overlayHeight - edgeWidth,
+                width: overlayWidth,
+                height: edgeWidth,
+                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                pointerEvents: 'auto'
+              }}
+              onMouseDown={(e) => handleStructureResizeMouseDown('bottom', e)}
+              title="Resize vertically"
+            />
+          )
+          
+          // Corner resize area (bottom-right corner)
+          overlays.push(
+            <div
+              key={`resize-corner-${key}`}
+              className="absolute cursor-nw-resize"
+              style={{
+                left: overlayLeft + overlayWidth - edgeWidth,
+                top: overlayTop + overlayHeight - edgeWidth,
+                width: edgeWidth,
+                height: edgeWidth,
+                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
+                pointerEvents: 'auto'
+              }}
+              onMouseDown={(e) => handleStructureResizeMouseDown('corner', e)}
+              title="Resize both directions"
+            />
+          )
         }
+
+        // Mark this structure as processed
+        processedStructures.add(structure.id)
       }
     }
 
@@ -649,8 +835,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     const overlays = []
     
     // Find the table structure for the selected column
-    const tableKey = `struct-${selectedColumn.tablePosition.row}-${selectedColumn.tablePosition.col}`
-    const tableStructure = structures.get(tableKey)
+    const tableStructure = getStructureAtPosition(
+      selectedColumn.tablePosition.row, 
+      selectedColumn.tablePosition.col, 
+      structures
+    )
     
     if (tableStructure && tableStructure.type === 'table') {
       const table = tableStructure as any
@@ -741,7 +930,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           }
           
           // Check if this structure is being edited
-          const isEditing = editingStructureName === key
+          const isEditing = editingStructureName === structure.id
           
           // Calculate tab dimensions - constrain to structure width
           const tabHeight = 24
@@ -817,12 +1006,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           )
         }
 
-        // Mark all cells of this structure as processed
-        for (let r = startPosition.row; r <= endPosition.row; r++) {
-          for (let c = startPosition.col; c <= endPosition.col; c++) {
-            processedStructures.add(`struct-${r}-${c}`)
-          }
-        }
+        // Mark this structure as processed
+        processedStructures.add(structure.id)
       }
     }
 
@@ -927,7 +1112,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
         const isSelected = selectedCell?.row === rowIndex && selectedCell?.col === colIndex
         const isInRange = isCellInRange(rowIndex, colIndex, selectedRange)
-        const structure = structures.get(`struct-${rowIndex}-${colIndex}`)
+        const structure = getStructureAtPosition(rowIndex, colIndex, structures)
         const mergedCell = getMergedCellContaining(rowIndex, colIndex, mergedCells)
         
         // Calculate cell dimensions for merged cells

@@ -6,6 +6,7 @@ export type Position = {
 
 export type Cell = {
   type: 'cell'
+  id: string
   position: Position
   name?: string
   value: string
@@ -13,6 +14,7 @@ export type Cell = {
 
 export type Array = {
   type: 'array'
+  id: string
   position: Position
   startPosition: Position
   endPosition: Position
@@ -23,6 +25,7 @@ export type Array = {
 
 export type Column = {
   type: 'column'
+  id: string
   position: Position
   tablePosition: Position
   columnIndex: number
@@ -31,6 +34,7 @@ export type Column = {
 
 export type Table = {
   type: 'table'
+  id: string
   position: Position
   startPosition: Position
   endPosition: Position
@@ -121,7 +125,7 @@ export type SelectionRange = {
   end: Position
 }
 
-export type ResizeType = 'column' | 'row'
+export type ResizeType = 'column' | 'row' | 'structure'
 
 // State management types
 export type SpreadsheetState = {
@@ -146,6 +150,9 @@ export type SpreadsheetState = {
   resizeIndex: number | null
   resizeStartPos: number
   resizeStartSize: number
+  isResizingStructure: boolean
+  structureResizeDirection: 'left' | 'right' | 'top' | 'bottom' | 'corner' | null
+  structureResizeStartDimensions: { rows: number, cols: number } | null
   startEditing: {row: number, col: number} | null
   expandedTableColumns: Set<string>
   structurePanelCollapsed: boolean

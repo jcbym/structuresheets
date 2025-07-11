@@ -23,9 +23,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   const currentStructure = React.useMemo(() => {
     if (!selectedStructure) return null
     
-    // Get the structure key and fetch the latest version from the structures map
-    const structureKey = `struct-${selectedStructure.position.row}-${selectedStructure.position.col}`
-    return structures.get(structureKey) || selectedStructure
+    // Use the structure's UUID to fetch the latest version from the structures map
+    return structures.get(selectedStructure.id) || selectedStructure
   }, [selectedStructure, structures])
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -223,14 +222,14 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="font-semibold text-gray-700">Columns</h4>
                     <button
-                      onClick={() => onToggleTableColumns(`struct-${tableStructure.position.row}-${tableStructure.position.col}`)}
+                      onClick={() => onToggleTableColumns(tableStructure.id)}
                       className="text-sm text-blue-600 hover:text-blue-800 transition-colors"
                     >
-                      {expandedTableColumns.has(`struct-${tableStructure.position.row}-${tableStructure.position.col}`) ? '▼' : '▶'}
+                      {expandedTableColumns.has(tableStructure.id) ? '▼' : '▶'}
                     </button>
                   </div>
                   
-                  {expandedTableColumns.has(`struct-${tableStructure.position.row}-${tableStructure.position.col}`) && (
+                  {expandedTableColumns.has(tableStructure.id) && (
                     <div className="space-y-1 ml-4 max-h-40 overflow-y-auto">
                       {Array.from({ length: tableStructure.dimensions.cols }, (_, index) => {
                         const columnIndex = tableStructure.startPosition.col + index

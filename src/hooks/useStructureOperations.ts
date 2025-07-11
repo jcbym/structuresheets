@@ -1,6 +1,6 @@
 import React from 'react'
-import { Structure, Cell, Array, Table, MergedCell } from '../types'
-import { getStructureKey, getCellKey, getCellValue, getStructureAtPosition } from '../utils'
+import { Structure, Cell, Array } from '../types'
+import { getCellValue, getStructureAtPosition, generateUUID } from '../utils'
 import { MAX_ROWS, MAX_COLS } from '../constants'
 
 export const useStructureOperations = (
@@ -22,6 +22,7 @@ export const useStructureOperations = (
       case 'cell':
         newStructure = {
           type: 'cell',
+          id: generateUUID(),
           position,
           name,
           value: getCellValue(row, col, cellData)
@@ -39,6 +40,7 @@ export const useStructureOperations = (
             if (cellRow < MAX_ROWS && cellCol < MAX_COLS) {
               cells.push({
                 type: 'cell',
+                id: generateUUID(),
                 position: { row: cellRow, col: cellCol },
                 value: getCellValue(cellRow, cellCol, cellData)
               })
@@ -48,6 +50,7 @@ export const useStructureOperations = (
 
         newStructure = {
           type: 'array',
+          id: generateUUID(),
           position,
           startPosition: { row, col },
           endPosition: { row: row + arrayDims.rows - 1, col: col + arrayDims.cols - 1 },
@@ -70,6 +73,7 @@ export const useStructureOperations = (
             if (cellRow < MAX_ROWS && cellCol < MAX_COLS) {
               rowCells.push({
                 type: 'cell',
+                id: generateUUID(),
                 position: { row: cellRow, col: cellCol },
                 value: getCellValue(cellRow, cellCol, cellData)
               })
@@ -78,6 +82,7 @@ export const useStructureOperations = (
           
           arrays.push({
             type: 'array',
+            id: generateUUID(),
             position: { row: row + r, col },
             startPosition: { row: row + r, col },
             endPosition: { row: row + r, col: col + tableDims.cols - 1 },
@@ -88,6 +93,7 @@ export const useStructureOperations = (
 
         newStructure = {
           type: 'table',
+          id: generateUUID(),
           position,
           startPosition: { row, col },
           endPosition: { row: row + tableDims.rows - 1, col: col + tableDims.cols - 1 },
@@ -102,24 +108,10 @@ export const useStructureOperations = (
         break
     }
 
-    // Set the main structure
+    // Set the main structure using UUID as key
     setStructures(prev => {
       const newStructures = new Map(prev)
-      newStructures.set(getStructureKey(row, col), newStructure)
-      
-      // For arrays and tables, also mark the constituent cells
-      if (type === 'array' || type === 'table') {
-        const dims = dimensions || { rows: 1, cols: 1 }
-        for (let r = 0; r < dims.rows; r++) {
-          for (let c = 0; c < dims.cols; c++) {
-            const cellRow = row + r
-            const cellCol = col + c
-            if (cellRow < MAX_ROWS && cellCol < MAX_COLS && !(r === 0 && c === 0)) {
-              newStructures.set(getStructureKey(cellRow, cellCol), newStructure)
-            }
-          }
-        }
-      }
+      newStructures.set(newStructure.id, newStructure)
       
       return newStructures
     })
@@ -158,11 +150,12 @@ export const useStructureOperations = (
             for (let c = startCol; c <= endCol; c++) {
               const cellStructure: Structure = {
                 type: 'cell',
+                id: generateUUID(),
                 position: { row: r, col: c },
                 name: `cell_${r}_${c}`,
                 value: getCellValue(r, c, cellData)
               }
-              newStructures.set(getStructureKey(r, c), cellStructure)
+              newStructures.set(cellStructure.id, cellStructure)
             }
           }
           return newStructures
@@ -176,6 +169,7 @@ export const useStructureOperations = (
             if (r < MAX_ROWS && c < MAX_COLS) {
               cells.push({
                 type: 'cell',
+                id: generateUUID(),
                 position: { row: r, col: c },
                 value: getCellValue(r, c, cellData)
               })
@@ -185,6 +179,7 @@ export const useStructureOperations = (
 
         newStructure = {
           type: 'array',
+          id: generateUUID(),
           position,
           startPosition: { row: startRow, col: startCol },
           endPosition: { row: endRow, col: endCol },
@@ -204,6 +199,7 @@ export const useStructureOperations = (
             if (r < MAX_ROWS && c < MAX_COLS) {
               rowCells.push({
                 type: 'cell',
+                id: generateUUID(),
                 position: { row: r, col: c },
                 value: getCellValue(r, c, cellData)
               })
@@ -212,6 +208,7 @@ export const useStructureOperations = (
           
           arrays.push({
             type: 'array',
+            id: generateUUID(),
             position: { row: r, col: startCol },
             startPosition: { row: r, col: startCol },
             endPosition: { row: r, col: endCol },
@@ -222,6 +219,7 @@ export const useStructureOperations = (
 
         newStructure = {
           type: 'table',
+          id: generateUUID(),
           position,
           startPosition: { row: startRow, col: startCol },
           endPosition: { row: endRow, col: endCol },
@@ -236,21 +234,10 @@ export const useStructureOperations = (
         break
     }
 
-    // Set the main structure
+    // Set the main structure using UUID as key
     setStructures(prev => {
       const newStructures = new Map(prev)
-      newStructures.set(getStructureKey(startRow, startCol), newStructure)
-      
-      // For arrays and tables, mark all constituent cells
-      if (type === 'array' || type === 'table') {
-        for (let r = startRow; r <= endRow; r++) {
-          for (let c = startCol; c <= endCol; c++) {
-            if (r < MAX_ROWS && c < MAX_COLS && !(r === startRow && c === startCol)) {
-              newStructures.set(getStructureKey(r, c), newStructure)
-            }
-          }
-        }
-      }
+      newStructures.set(newStructure.id, newStructure)
       
       return newStructures
     })
@@ -258,12 +245,22 @@ export const useStructureOperations = (
 
   // Function to update table header settings
   const updateTableHeaders = React.useCallback((row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => {
-    const structureKey = getStructureKey(row, col)
-    const structure = structures.get(structureKey)
+    // Find the structure at the given position
+    let targetStructure: Structure | null = null
+    for (const [id, structure] of structures) {
+      if (structure.type === 'table') {
+        const { startPosition, endPosition } = structure
+        if (row >= startPosition.row && row <= endPosition.row &&
+            col >= startPosition.col && col <= endPosition.col) {
+          targetStructure = structure
+          break
+        }
+      }
+    }
     
-    if (structure && structure.type === 'table') {
+    if (targetStructure && targetStructure.type === 'table') {
       const updatedTable = { 
-        ...structure, 
+        ...targetStructure, 
         hasHeaderRow, 
         hasHeaderCol,
         headerRows: headerRows || 1,
@@ -272,17 +269,7 @@ export const useStructureOperations = (
       
       setStructures(prev => {
         const newStructures = new Map(prev)
-        newStructures.set(structureKey, updatedTable)
-        
-        // Update all cells that belong to this table
-        const { startPosition, endPosition } = structure
-        for (let r = startPosition.row; r <= endPosition.row; r++) {
-          for (let c = startPosition.col; c <= endPosition.col; c++) {
-            if (!(r === startPosition.row && c === startPosition.col)) {
-              newStructures.set(getStructureKey(r, c), updatedTable)
-            }
-          }
-        }
+        newStructures.set(updatedTable.id, updatedTable)
         
         return newStructures
       })

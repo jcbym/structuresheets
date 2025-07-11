@@ -84,6 +84,12 @@ export const App: React.FC = () => {
               dragStart={state.dragStart}
               resizeStartPos={state.resizeStartPos}
               resizeStartSize={state.resizeStartSize}
+              isResizingStructure={state.isResizingStructure}
+              structureResizeDirection={state.structureResizeDirection}
+              structureResizeStartDimensions={state.structureResizeStartDimensions}
+              setIsResizingStructure={state.setIsResizingStructure}
+              setStructureResizeDirection={state.setStructureResizeDirection}
+              setStructureResizeStartDimensions={state.setStructureResizeStartDimensions}
               setCellData={state.setCellData}
               setStructures={state.setStructures}
               setSelectedCell={state.setSelectedCell}
@@ -122,8 +128,16 @@ export const App: React.FC = () => {
           onSelectColumn={(tablePosition, columnIndex) => {
             state.setSelectedColumn({ tablePosition, columnIndex })
             // Also select the table structure when a column is selected
-            const tableKey = `struct-${tablePosition.row}-${tablePosition.col}`
-            const tableStructure = state.structures.get(tableKey)
+            // Find the table structure at the given position
+            let tableStructure = null
+            for (const [id, structure] of state.structures) {
+              if (structure.type === 'table' && 
+                  structure.position.row === tablePosition.row && 
+                  structure.position.col === tablePosition.col) {
+                tableStructure = structure
+                break
+              }
+            }
             if (tableStructure) {
               state.setSelectedStructure(tableStructure)
             }

@@ -23,6 +23,9 @@ const initialState: SpreadsheetState = {
   resizeIndex: null,
   resizeStartPos: 0,
   resizeStartSize: 0,
+  isResizingStructure: false,
+  structureResizeDirection: null,
+  structureResizeStartDimensions: null,
   startEditing: null,
   expandedTableColumns: new Set(),
   structurePanelCollapsed: false,
@@ -52,6 +55,9 @@ export const useSpreadsheetState = () => {
   const [resizeIndex, setResizeIndex] = React.useState<number | null>(null)
   const [resizeStartPos, setResizeStartPos] = React.useState(0)
   const [resizeStartSize, setResizeStartSize] = React.useState(0)
+  const [isResizingStructure, setIsResizingStructure] = React.useState(false)
+  const [structureResizeDirection, setStructureResizeDirection] = React.useState<'left' | 'right' | 'top' | 'bottom' | 'corner' | null>(null)
+  const [structureResizeStartDimensions, setStructureResizeStartDimensions] = React.useState<{ rows: number, cols: number } | null>(null)
   const [startEditing, setStartEditing] = React.useState<{row: number, col: number} | null>(null)
   const [expandedTableColumns, setExpandedTableColumns] = React.useState<Set<string>>(new Set())
   const [structurePanelCollapsed, setStructurePanelCollapsed] = React.useState(false)
@@ -80,6 +86,9 @@ export const useSpreadsheetState = () => {
     resizeIndex,
     resizeStartPos,
     resizeStartSize,
+    isResizingStructure,
+    structureResizeDirection,
+    structureResizeStartDimensions,
     startEditing,
     expandedTableColumns,
     structurePanelCollapsed,
@@ -107,6 +116,9 @@ export const useSpreadsheetState = () => {
     setResizeIndex,
     setResizeStartPos,
     setResizeStartSize,
+    setIsResizingStructure,
+    setStructureResizeDirection,
+    setStructureResizeStartDimensions,
     setStartEditing,
     setExpandedTableColumns,
     setStructurePanelCollapsed,

@@ -1,6 +1,15 @@
 import { MergedCell, Position, Structure, Table } from '../types'
 import { DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_HEADER_HEIGHT, DEFAULT_HEADER_WIDTH, MAX_COLS, MAX_ROWS } from '../constants'
 
+// UUID generation utility
+export const generateUUID = (): string => {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0
+    const v = c === 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
+
 // Key generation utilities
 export const getCellKey = (row: number, col: number): string => `${row}-${col}`
 
@@ -94,7 +103,30 @@ export const getCellValue = (row: number, col: number, cellData: Map<string, str
 }
 
 export const getStructureAtPosition = (row: number, col: number, structures: Map<string, Structure>): Structure | undefined => {
-  return structures.get(getStructureKey(row, col))
+  // Search through all structures to find one that contains this position
+  for (const [id, structure] of structures) {
+    // For single cell structures, check exact position match
+    if (structure.type === 'cell') {
+      if (structure.position.row === row && structure.position.col === col) {
+        return structure
+      }
+    }
+    // For array and table structures, check if position is within bounds
+    else if (structure.type === 'array' || structure.type === 'table') {
+      const { startPosition, endPosition } = structure
+      if (row >= startPosition.row && row <= endPosition.row &&
+          col >= startPosition.col && col <= endPosition.col) {
+        return structure
+      }
+    }
+    // For column structures, check if position matches
+    else if (structure.type === 'column') {
+      if (structure.position.row === row && structure.position.col === col) {
+        return structure
+      }
+    }
+  }
+  return undefined
 }
 
 // Merged cell utilities

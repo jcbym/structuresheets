@@ -1,6 +1,6 @@
 import React from 'react'
 import { Structure, MergedCell } from '../types'
-import { getCellKey, getStructureKey, getCellValue, getMergedCellContaining } from '../utils'
+import { getCellKey, getCellValue, getMergedCellContaining, getStructureAtPosition } from '../utils'
 
 export const useCellOperations = (
   cellData: Map<string, string>,
@@ -23,12 +23,11 @@ export const useCellOperations = (
     })
 
     // Update structure if it exists
-    const structureKey = getStructureKey(row, col)
-    const structure = structures.get(structureKey)
+    const structure = getStructureAtPosition(row, col, structures)
     if (structure && structure.type === 'cell') {
       setStructures(prev => {
         const newStructures = new Map(prev)
-        newStructures.set(structureKey, { ...structure, value })
+        newStructures.set(structure.id, { ...structure, value })
         return newStructures
       })
     }
