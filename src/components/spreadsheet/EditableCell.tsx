@@ -175,7 +175,7 @@ export const EditableCell: React.FC<EditableCellProps> = ({
           className={getCellClasses()}
           style={getCellStyle()}
           title={structure?.name ? `${structure.type}: ${structure.name}` : undefined}
-          onClick={() => setIsEditing(true)}
+          onClick={!isHeaderCell() ? () => setIsEditing(true) : undefined}
         >
           {cellValue || '\u00A0'}
         </div>

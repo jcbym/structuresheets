@@ -8,6 +8,7 @@ const initialState: SpreadsheetState = {
   selectedCell: null,
   selectedRange: null,
   selectedStructure: null,
+  selectedColumn: null,
   isDragging: false,
   dragStart: null,
   scrollTop: 0,
@@ -23,6 +24,9 @@ const initialState: SpreadsheetState = {
   resizeStartPos: 0,
   resizeStartSize: 0,
   startEditing: null,
+  expandedTableColumns: new Set(),
+  structurePanelCollapsed: false,
+  structurePanelWidth: 320,
 }
 
 export const useSpreadsheetState = () => {
@@ -33,6 +37,7 @@ export const useSpreadsheetState = () => {
   const [selectedCell, setSelectedCell] = React.useState<{row: number, col: number} | null>(null)
   const [selectedRange, setSelectedRange] = React.useState<SelectionRange | null>(null)
   const [selectedStructure, setSelectedStructure] = React.useState<Structure | null>(null)
+  const [selectedColumn, setSelectedColumn] = React.useState<{tablePosition: Position, columnIndex: number} | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
   const [dragStart, setDragStart] = React.useState<Position | null>(null)
   const [scrollTop, setScrollTop] = React.useState(0)
@@ -48,6 +53,9 @@ export const useSpreadsheetState = () => {
   const [resizeStartPos, setResizeStartPos] = React.useState(0)
   const [resizeStartSize, setResizeStartSize] = React.useState(0)
   const [startEditing, setStartEditing] = React.useState<{row: number, col: number} | null>(null)
+  const [expandedTableColumns, setExpandedTableColumns] = React.useState<Set<string>>(new Set())
+  const [structurePanelCollapsed, setStructurePanelCollapsed] = React.useState(false)
+  const [structurePanelWidth, setStructurePanelWidth] = React.useState(320)
 
   return {
     // State values
@@ -57,6 +65,7 @@ export const useSpreadsheetState = () => {
     selectedCell,
     selectedRange,
     selectedStructure,
+    selectedColumn,
     isDragging,
     dragStart,
     scrollTop,
@@ -72,6 +81,9 @@ export const useSpreadsheetState = () => {
     resizeStartPos,
     resizeStartSize,
     startEditing,
+    expandedTableColumns,
+    structurePanelCollapsed,
+    structurePanelWidth,
 
     // State setters
     setCellData,
@@ -80,6 +92,7 @@ export const useSpreadsheetState = () => {
     setSelectedCell,
     setSelectedRange,
     setSelectedStructure,
+    setSelectedColumn,
     setIsDragging,
     setDragStart,
     setScrollTop,
@@ -95,5 +108,8 @@ export const useSpreadsheetState = () => {
     setResizeStartPos,
     setResizeStartSize,
     setStartEditing,
+    setExpandedTableColumns,
+    setStructurePanelCollapsed,
+    setStructurePanelWidth,
   }
 }

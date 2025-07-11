@@ -69,6 +69,7 @@ export const App: React.FC = () => {
               selectedCell={state.selectedCell}
               selectedRange={state.selectedRange}
               selectedStructure={state.selectedStructure}
+              selectedColumn={state.selectedColumn}
               scrollTop={state.scrollTop}
               scrollLeft={state.scrollLeft}
               columnWidths={state.columnWidths}
@@ -88,6 +89,7 @@ export const App: React.FC = () => {
               setSelectedCell={state.setSelectedCell}
               setSelectedRange={state.setSelectedRange}
               setSelectedStructure={state.setSelectedStructure}
+              setSelectedColumn={state.setSelectedColumn}
               setScrollTop={state.setScrollTop}
               setScrollLeft={state.setScrollLeft}
               setStartEditing={state.setStartEditing}
@@ -110,14 +112,38 @@ export const App: React.FC = () => {
         </div>
 
         {/* Structure Panel */}
-        <div className="flex-shrink-0">
-          <StructurePanel
-            structures={state.structures}
-            selectedStructure={state.selectedStructure}
-            onCreateStructure={createStructure}
-            onUpdateTableHeaders={updateTableHeaders}
-          />
-        </div>
+        <StructurePanel
+          structures={state.structures}
+          selectedStructure={state.selectedStructure}
+          selectedColumn={state.selectedColumn}
+          expandedTableColumns={state.expandedTableColumns}
+          onCreateStructure={createStructure}
+          onUpdateTableHeaders={updateTableHeaders}
+          onSelectColumn={(tablePosition, columnIndex) => {
+            state.setSelectedColumn({ tablePosition, columnIndex })
+            // Also select the table structure when a column is selected
+            const tableKey = `struct-${tablePosition.row}-${tablePosition.col}`
+            const tableStructure = state.structures.get(tableKey)
+            if (tableStructure) {
+              state.setSelectedStructure(tableStructure)
+            }
+          }}
+          onToggleTableColumns={(tableKey) => {
+            state.setExpandedTableColumns(prev => {
+              const newSet = new Set(prev)
+              if (newSet.has(tableKey)) {
+                newSet.delete(tableKey)
+              } else {
+                newSet.add(tableKey)
+              }
+              return newSet
+            })
+          }}
+          isCollapsed={state.structurePanelCollapsed}
+          width={state.structurePanelWidth}
+          onToggleCollapse={() => state.setStructurePanelCollapsed(!state.structurePanelCollapsed)}
+          onWidthChange={state.setStructurePanelWidth}
+        />
       </div>
 
       {/* Context Menu */}
@@ -129,6 +155,8 @@ export const App: React.FC = () => {
           onMergeCells={mergeCells}
           onUnmergeCells={unmergeCells}
           selectedCell={state.selectedCell}
+          selectedRange={state.selectedRange}
+          selectedStructure={state.selectedStructure}
           setContextMenu={state.setContextMenu}
           getStructureAtPositionSafe={getStructureAtPositionSafe}
           updateTableHeaders={updateTableHeaders}

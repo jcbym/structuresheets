@@ -8,6 +8,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onMergeCells, 
   onUnmergeCells, 
   selectedCell,
+  selectedRange,
+  selectedStructure,
   setContextMenu,
   getStructureAtPositionSafe,
   updateTableHeaders,
@@ -20,9 +22,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   // Event handlers
   const canAddHeaderLevels = (): boolean => {
-    if (!selectedCell) return false
-    const structure = getStructureAtPositionSafe(selectedCell.row, selectedCell.col)
-    return structure?.type === 'table'
+    return selectedStructure?.type === 'table'
   }
 
   const handleCreateArray = () => {
@@ -36,16 +36,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   }
 
   const handleAddColumnHeaderLevel = () => {
-    if (!selectedCell) return
-    const structure = getStructureAtPositionSafe(selectedCell.row, selectedCell.col)
-    if (!structure || structure.type !== 'table') return
+    if (!selectedStructure || selectedStructure.type !== 'table') return
     
-    const table = structure
+    const table = selectedStructure
     const newHeaderRows = (table.headerRows || 1) + 1
     
     updateTableHeaders(
-      selectedCell.row,
-      selectedCell.col,
+      table.position.row,
+      table.position.col,
       true,
       table.hasHeaderCol || false,
       newHeaderRows,
@@ -55,16 +53,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   }
 
   const handleAddRowHeaderLevel = () => {
-    if (!selectedCell) return
-    const structure = getStructureAtPositionSafe(selectedCell.row, selectedCell.col)
-    if (!structure || structure.type !== 'table') return
+    if (!selectedStructure || selectedStructure.type !== 'table') return
     
-    const table = structure
+    const table = selectedStructure
     const newHeaderCols = (table.headerCols || 1) + 1
     
     updateTableHeaders(
-      selectedCell.row,
-      selectedCell.col,
+      table.position.row,
+      table.position.col,
       table.hasHeaderRow || false,
       true,
       table.headerRows,
@@ -84,12 +80,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [onClose])
 
-  return (
-    <div
-      ref={menuRef}
-      className="fixed bg-white border border-gray-300 rounded shadow-lg py-1 z-50"
-      style={{ left: x, top: y, minWidth: '150px' }}
-    >
+  // Determine what to show based on selection
+  const hasMultipleCellsSelected = selectedRange !== null
+  const hasTableSelected = selectedStructure?.type === 'table'
+
+  const renderMultipleCellsMenu = () => (
+    <>
       <button
         className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
           !canMerge ? 'text-gray-400 cursor-not-allowed' : ''
@@ -130,9 +126,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       >
         Create Table
       </button>
-      
-      <hr className="my-1 border-gray-200" />
-      
+    </>
+  )
+
+  const renderTableMenu = () => (
+    <>
       <button
         className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
           !canAddHeaderLevels() ? 'text-gray-400 cursor-not-allowed' : ''
@@ -152,6 +150,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       >
         Add Row Header Level
       </button>
+    </>
+  )
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed bg-white border border-gray-300 rounded shadow-lg py-1 z-50"
+      style={{ left: x, top: y, minWidth: '150px' }}
+    >
+      {hasMultipleCellsSelected && renderMultipleCellsMenu()}
+      {hasTableSelected && renderTableMenu()}
     </div>
   )
 }

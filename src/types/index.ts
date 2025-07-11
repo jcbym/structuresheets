@@ -21,6 +21,14 @@ export type Array = {
   dimensions: { rows: number, cols: number }
 }
 
+export type Column = {
+  type: 'column'
+  position: Position
+  tablePosition: Position
+  columnIndex: number
+  name?: string
+}
+
 export type Table = {
   type: 'table'
   position: Position
@@ -33,6 +41,7 @@ export type Table = {
   hasHeaderCol?: boolean
   headerRows?: number
   headerCols?: number
+  columns?: Column[]
 }
 
 export type MergedCell = {
@@ -43,7 +52,7 @@ export type MergedCell = {
   value: string
 }
 
-export type Structure = Cell | Array | Table
+export type Structure = Cell | Array | Table | Column
 
 // Component prop types
 export type ContextMenuProps = {
@@ -53,6 +62,8 @@ export type ContextMenuProps = {
   onMergeCells: () => void
   onUnmergeCells: () => void
   selectedCell: {row: number, col: number} | null
+  selectedRange: SelectionRange | null
+  selectedStructure: Structure | null
   setContextMenu: React.Dispatch<React.SetStateAction<{x: number, y: number} | null>>
   getStructureAtPositionSafe: (row: number, col: number) => Structure | undefined
   updateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
@@ -92,8 +103,16 @@ export type ToolbarProps = {
 export type StructurePanelProps = {
   structures: Map<string, Structure>
   selectedStructure: Structure | null
+  selectedColumn: {tablePosition: Position, columnIndex: number} | null
+  expandedTableColumns: Set<string>
   onCreateStructure: (type: Structure['type'], name: string, dimensions?: {rows: number, cols: number}) => void
   onUpdateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
+  onSelectColumn: (tablePosition: Position, columnIndex: number) => void
+  onToggleTableColumns: (tableKey: string) => void
+  isCollapsed: boolean
+  width: number
+  onToggleCollapse: () => void
+  onWidthChange: (width: number) => void
 }
 
 // Selection and interaction types
@@ -112,6 +131,7 @@ export type SpreadsheetState = {
   selectedCell: {row: number, col: number} | null
   selectedRange: SelectionRange | null
   selectedStructure: Structure | null
+  selectedColumn: {tablePosition: Position, columnIndex: number} | null
   isDragging: boolean
   dragStart: Position | null
   scrollTop: number
@@ -127,4 +147,7 @@ export type SpreadsheetState = {
   resizeStartPos: number
   resizeStartSize: number
   startEditing: {row: number, col: number} | null
+  expandedTableColumns: Set<string>
+  structurePanelCollapsed: boolean
+  structurePanelWidth: number
 }

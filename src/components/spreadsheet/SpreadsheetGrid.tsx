@@ -1,6 +1,6 @@
 import React from 'react'
 import { EditableCell } from './EditableCell'
-import { Structure, MergedCell } from '../../types'
+import { Structure, MergedCell, Position } from '../../types'
 import { 
   calculateVisibleCols, 
   calculateVisibleRows, 
@@ -28,6 +28,7 @@ interface SpreadsheetGridProps {
   selectedCell: {row: number, col: number} | null
   selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null
   selectedStructure: Structure | null
+  selectedColumn: {tablePosition: Position, columnIndex: number} | null
   scrollTop: number
   scrollLeft: number
   columnWidths: Map<number, number>
@@ -49,6 +50,7 @@ interface SpreadsheetGridProps {
   setSelectedCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
   setSelectedRange: React.Dispatch<React.SetStateAction<{start: {row: number, col: number}, end: {row: number, col: number}} | null>>
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
+  setSelectedColumn: React.Dispatch<React.SetStateAction<{tablePosition: Position, columnIndex: number} | null>>
   setScrollTop: React.Dispatch<React.SetStateAction<number>>
   setScrollLeft: React.Dispatch<React.SetStateAction<number>>
   setStartEditing: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
@@ -79,6 +81,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   selectedCell,
   selectedRange,
   selectedStructure,
+  selectedColumn,
   scrollTop,
   scrollLeft,
   columnWidths,
@@ -98,6 +101,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setSelectedCell,
   setSelectedRange,
   setSelectedStructure,
+  setSelectedColumn,
   setScrollTop,
   setScrollLeft,
   setStartEditing,
@@ -130,9 +134,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   // Handle structure name editing
   const handleStructureNameDoubleClick = (structure: Structure) => {
-    const structureKey = structure.type === 'cell' 
-      ? `struct-${structure.position.row}-${structure.position.col}`
-      : `struct-${structure.startPosition.row}-${structure.startPosition.col}`
+    let structureKey: string
+    if (structure.type === 'cell' || structure.type === 'column') {
+      structureKey = `struct-${structure.position.row}-${structure.position.col}`
+    } else {
+      structureKey = `struct-${structure.startPosition.row}-${structure.startPosition.col}`
+    }
     
     setEditingStructureName(structureKey)
     setEditingNameValue(structure.name || '')
@@ -156,7 +163,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           newStructures.set(editingStructureName, updatedStructure)
           
           // Update all related structure references for arrays and tables
-          if (structure.type !== 'cell') {
+          if (structure.type === 'array' || structure.type === 'table') {
             const { startPosition, endPosition } = structure
             for (let r = startPosition.row; r <= endPosition.row; r++) {
               for (let c = startPosition.col; c <= endPosition.col; c++) {
@@ -174,8 +181,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
              structure.type === 'cell' && 
              selectedStructure.position.row === structure.position.row && 
              selectedStructure.position.col === structure.position.col) ||
-            (selectedStructure.type !== 'cell' && 
-             structure.type !== 'cell' && 
+            (selectedStructure.type === 'column' && 
+             structure.type === 'column' && 
+             selectedStructure.position.row === structure.position.row && 
+             selectedStructure.position.col === structure.position.col) ||
+            ((selectedStructure.type === 'array' || selectedStructure.type === 'table') && 
+             (structure.type === 'array' || structure.type === 'table') && 
+             'startPosition' in selectedStructure && 'endPosition' in selectedStructure &&
+             'startPosition' in structure && 'endPosition' in structure &&
              selectedStructure.startPosition.row === structure.startPosition.row && 
              selectedStructure.startPosition.col === structure.startPosition.col &&
              selectedStructure.endPosition.row === structure.endPosition.row && 
@@ -226,18 +239,33 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const handleMouseDown = (row: number, col: number, e: React.MouseEvent) => {
     if (e.button !== 0) return // Only handle left-click
 
+    // Check if this is a table header - if so, don't handle mouse down here
+    // Let the column header click handler take care of it
+    if (isTableHeader(row, col, structures)) {
+      return // Don't handle mouse down for table headers
+    }
+
     // Check if the clicked cell is part of a structure
     const structure = getStructureAtPosition(row, col, structures)
     
     if (structure) {
+      // Always clear column selection when clicking on any structure cell (including table cells)
+      setSelectedColumn(null)
+      
       // Check if this structure is already selected
       const isSameStructureSelected = selectedStructure && (
         (selectedStructure.type === 'cell' && 
          structure.type === 'cell' && 
          selectedStructure.position.row === structure.position.row && 
          selectedStructure.position.col === structure.position.col) ||
-        (selectedStructure.type !== 'cell' && 
-         structure.type !== 'cell' && 
+        (selectedStructure.type === 'column' && 
+         structure.type === 'column' && 
+         selectedStructure.position.row === structure.position.row && 
+         selectedStructure.position.col === structure.position.col) ||
+        ((selectedStructure.type === 'array' || selectedStructure.type === 'table') && 
+         (structure.type === 'array' || structure.type === 'table') && 
+         'startPosition' in selectedStructure && 'endPosition' in selectedStructure &&
+         'startPosition' in structure && 'endPosition' in structure &&
          selectedStructure.startPosition.row === structure.startPosition.row && 
          selectedStructure.startPosition.col === structure.startPosition.col &&
          selectedStructure.endPosition.row === structure.endPosition.row && 
@@ -257,8 +285,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         setSelectedRange(null)
       }
     } else {
-      // Click on empty cell - clear structure selection and select cell normally
+      // Click on empty cell - clear all selections and select cell normally
       setSelectedStructure(null)
+      setSelectedColumn(null) // Clear column selection when clicking outside tables
       setSelectedCell({ row, col })
       setStartEditing(null)
       
@@ -286,6 +315,35 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const handleRightClick = (row: number, col: number, e: React.MouseEvent) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  const handleColumnHeaderClick = (row: number, col: number) => {
+    // Check if this is a table header cell
+    const structure = getStructureAtPosition(row, col, structures)
+    if (structure && structure.type === 'table') {
+      const table = structure as any
+      const columnIndex = col - table.startPosition.col
+      
+      // Check if this column is already selected
+      const isSameColumnSelected = selectedColumn &&
+        selectedColumn.tablePosition.row === table.position.row &&
+        selectedColumn.tablePosition.col === table.position.col &&
+        selectedColumn.columnIndex === columnIndex
+      
+      if (isSameColumnSelected) {
+        // Clicking on already selected column - deselect it
+        setSelectedColumn(null)
+        // Keep the table selected
+        setSelectedStructure(table)
+      } else {
+        // Select the new column and the table
+        setSelectedColumn({ tablePosition: table.position, columnIndex })
+        setSelectedStructure(table)
+      }
+      
+      setSelectedCell(null)
+      setSelectedRange(null)
+    }
   }
 
   const handleHeaderHover = (row: number, col: number, isEntering: boolean) => {
@@ -511,7 +569,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       if (processedStructures.has(key)) continue
 
       let startPosition, endPosition
-      if (structure.type === 'cell') {
+      if (structure.type === 'cell' || structure.type === 'column') {
         startPosition = endPosition = structure.position
       } else {
         startPosition = structure.startPosition
@@ -540,8 +598,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
            structure.type === 'cell' && 
            selectedStructure.position.row === structure.position.row && 
            selectedStructure.position.col === structure.position.col) ||
-          (selectedStructure.type !== 'cell' && 
-           structure.type !== 'cell' && 
+          (selectedStructure.type === 'column' && 
+           structure.type === 'column' && 
+           selectedStructure.position.row === structure.position.row && 
+           selectedStructure.position.col === structure.position.col) ||
+          ((selectedStructure.type === 'array' || selectedStructure.type === 'table') && 
+           (structure.type === 'array' || structure.type === 'table') && 
+           'startPosition' in selectedStructure && 'endPosition' in selectedStructure &&
+           'startPosition' in structure && 'endPosition' in structure &&
            selectedStructure.startPosition.row === structure.startPosition.row && 
            selectedStructure.startPosition.col === structure.startPosition.col &&
            selectedStructure.endPosition.row === structure.endPosition.row && 
@@ -578,6 +642,53 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return overlays
   }
 
+  // Render column selection overlays
+  const renderColumnSelectionOverlays = () => {
+    if (!selectedColumn) return []
+
+    const overlays = []
+    
+    // Find the table structure for the selected column
+    const tableKey = `struct-${selectedColumn.tablePosition.row}-${selectedColumn.tablePosition.col}`
+    const tableStructure = structures.get(tableKey)
+    
+    if (tableStructure && tableStructure.type === 'table') {
+      const table = tableStructure as any
+      const selectedColIndex = table.startPosition.col + selectedColumn.columnIndex
+      
+      // Check if the selected column is visible in the current viewport
+      if (selectedColIndex >= startCol && selectedColIndex < endCol) {
+        const columnLeft = getColumnPosition(selectedColIndex, columnWidths)
+        const columnWidth = getColumnWidth(selectedColIndex, columnWidths)
+        
+        // Calculate the full height of the table for this column
+        const tableTop = getRowPosition(table.startPosition.row, rowHeights)
+        let tableHeight = 0
+        for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+          tableHeight += getRowHeight(r, rowHeights)
+        }
+        
+        // Create the column selection overlay
+        overlays.push(
+          <div
+            key={`column-selection-${selectedColIndex}`}
+            className="absolute pointer-events-none border-4 border-green-600"
+            style={{
+              left: columnLeft,
+              top: tableTop,
+              width: columnWidth,
+              height: tableHeight,
+              zIndex: Z_INDEX.STRUCTURE_OVERLAY + 2 // Higher than structure overlays
+            }}
+            title={`Selected column ${selectedColumn.columnIndex + 1}`}
+          />
+        )
+      }
+    }
+
+    return overlays
+  }
+
   // Render structure name tabs
   const renderStructureNameTabs = () => {
     const tabs = []
@@ -588,7 +699,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       if (!structure.name) continue // Only show tabs for named structures
 
       let startPosition, endPosition
-      if (structure.type === 'cell') {
+      if (structure.type === 'cell' || structure.type === 'column') {
         startPosition = endPosition = structure.position
       } else {
         startPosition = structure.startPosition
@@ -604,8 +715,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
            structure.type === 'cell' && 
            selectedStructure.position.row === structure.position.row && 
            selectedStructure.position.col === structure.position.col) ||
-          (selectedStructure.type !== 'cell' && 
-           structure.type !== 'cell' && 
+          (selectedStructure.type === 'column' && 
+           structure.type === 'column' && 
+           selectedStructure.position.row === structure.position.row && 
+           selectedStructure.position.col === structure.position.col) ||
+          ((selectedStructure.type === 'array' || selectedStructure.type === 'table') && 
+           (structure.type === 'array' || structure.type === 'table') && 
+           'startPosition' in selectedStructure && 'endPosition' in selectedStructure &&
+           'startPosition' in structure && 'endPosition' in structure &&
            selectedStructure.startPosition.row === structure.startPosition.row && 
            selectedStructure.startPosition.col === structure.startPosition.col &&
            selectedStructure.endPosition.row === structure.endPosition.row && 
@@ -828,10 +945,16 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           }
         }
         
+        // Add green column borders for tables (but not individual cell selection borders)
+        let borderClass = 'border border-gray-300'
+        if (structure && structure.type === 'table') {
+          borderClass = 'border-l-1 border-r-1 border-t border-b border-l-green-500 border-r-green-500 border-t-gray-300 border-b-gray-300'
+        }
+
         cells.push(
           <div
             key={`cell-${rowIndex}-${colIndex}`}
-            className={`border border-gray-300 ${isInRange ? 'bg-blue-100' : ''} ${mergedCell ? 'bg-orange-50' : ''}`}
+            className={`${borderClass} ${isInRange ? 'bg-blue-100' : ''} ${mergedCell ? 'bg-orange-50' : ''}`}
             style={{
               position: 'absolute',
               left: getColumnPosition(colIndex, columnWidths),
@@ -851,6 +974,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             onMouseLeave={() => {
               if (isTableHeader(rowIndex, colIndex, structures)) {
                 handleHeaderHover(rowIndex, colIndex, false)
+              }
+            }}
+            onClick={(e) => {
+              if (isTableHeader(rowIndex, colIndex, structures)) {
+                e.stopPropagation()
+                handleColumnHeaderClick(rowIndex, colIndex)
               }
             }}
           >
@@ -960,6 +1089,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         
         {/* Structure overlays */}
         {renderStructureOverlays()}
+        
+        {/* Column selection overlays */}
+        {renderColumnSelectionOverlays()}
         
         {/* Structure name tabs */}
         {renderStructureNameTabs()}
