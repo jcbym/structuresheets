@@ -3,10 +3,12 @@ import { SpreadsheetGrid } from './spreadsheet/SpreadsheetGrid'
 import { Toolbar } from './ui/Toolbar'
 import { StructurePanel } from './ui/StructurePanel'
 import { ContextMenu } from './ui/ContextMenu'
+import { ConflictDialog } from './ui/ConflictDialog'
 import { useSpreadsheetState } from '../hooks/useSpreadsheetState'
 import { useCellOperations } from '../hooks/useCellOperations'
 import { useMergeOperations } from '../hooks/useMergeOperations'
 import { useStructureOperations } from '../hooks/useStructureOperations'
+import { moveStructureCells, moveStructurePosition } from '../utils'
 
 export const App: React.FC = () => {
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -39,13 +41,15 @@ export const App: React.FC = () => {
     createStructure, 
     createStructureFromToolbar, 
     updateTableHeaders, 
-    getStructureAtPositionSafe 
+    getStructureAtPositionSafe,
+    updateStructureName
   } = useStructureOperations(
     state.cellData,
     state.structures,
     state.setStructures,
     state.selectedCell,
-    state.selectedRange
+    state.selectedRange,
+    state.setSelectedStructure
   )
 
 
@@ -77,19 +81,29 @@ export const App: React.FC = () => {
               startEditing={state.startEditing}
               hoveredHeaderCell={state.hoveredHeaderCell}
               showAddColumnButton={state.showAddColumnButton}
-              isResizing={state.isResizing}
-              resizeType={state.resizeType}
-              resizeIndex={state.resizeIndex}
-              isDragging={state.isDragging}
-              dragStart={state.dragStart}
-              resizeStartPos={state.resizeStartPos}
-              resizeStartSize={state.resizeStartSize}
+              isResizingSheetHeader={state.isResizingSheetHeader}
+              sheetHeaderResizeType={state.sheetHeaderResizeType}
+              sheetHeaderResizeIndex={state.sheetHeaderResizeIndex}
+              isDraggingSheetHeader={state.isDraggingSheetHeader}
+              sheetHeaderDragStart={state.sheetHeaderDragStart}
+              sheetHeaderResizeStartPos={state.sheetHeaderResizeStartPos}
+              sheetHeaderResizeStartSize={state.sheetHeaderResizeStartSize}
               isResizingStructure={state.isResizingStructure}
               structureResizeDirection={state.structureResizeDirection}
               structureResizeStartDimensions={state.structureResizeStartDimensions}
+              structureResizeStartX={state.structureResizeStartX}
+              structureResizeStartY={state.structureResizeStartY}
+              isDraggingStructure={state.isDraggingStructure}
+              draggedStructure={state.draggedStructure}
+              dragOffset={state.dragOffset}
+              dropTarget={state.dropTarget}
+              showConflictDialog={state.showConflictDialog}
+              conflictDialogData={state.conflictDialogData}
               setIsResizingStructure={state.setIsResizingStructure}
               setStructureResizeDirection={state.setStructureResizeDirection}
               setStructureResizeStartDimensions={state.setStructureResizeStartDimensions}
+              setStructureResizeStartX={state.setStructureResizeStartX}
+              setStructureResizeStartY={state.setStructureResizeStartY}
               setCellData={state.setCellData}
               setStructures={state.setStructures}
               setSelectedCell={state.setSelectedCell}
@@ -104,13 +118,19 @@ export const App: React.FC = () => {
               setDragStart={state.setDragStart}
               setHoveredHeaderCell={state.setHoveredHeaderCell}
               setShowAddColumnButton={state.setShowAddColumnButton}
-              setIsResizing={state.setIsResizing}
-              setResizeType={state.setResizeType}
-              setResizeIndex={state.setResizeIndex}
-              setResizeStartPos={state.setResizeStartPos}
-              setResizeStartSize={state.setResizeStartSize}
+              setIsResizingSheetHeader={state.setIsResizingSheetHeader}
+              setSheetHeaderResizeType={state.setSheetHeaderResizeType}
+              setSheetHeaderResizeIndex={state.setSheetHeaderResizeIndex}
+              setSheetHeaderResizeStartPos={state.setSheetHeaderResizeStartPos}
+              setSheetHeaderResizeStartSize={state.setSheetHeaderResizeStartSize}
               setColumnWidths={state.setColumnWidths}
               setRowHeights={state.setRowHeights}
+              setIsDraggingStructure={state.setIsDraggingStructure}
+              setDraggedStructure={state.setDraggedStructure}
+              setDragOffset={state.setDragOffset}
+              setDropTarget={state.setDropTarget}
+              setShowConflictDialog={state.setShowConflictDialog}
+              setConflictDialogData={state.setConflictDialogData}
               onCellUpdate={updateCell}
               containerRef={containerRef}
             />
@@ -125,20 +145,13 @@ export const App: React.FC = () => {
           expandedTableColumns={state.expandedTableColumns}
           onCreateStructure={createStructure}
           onUpdateTableHeaders={updateTableHeaders}
-          onSelectColumn={(tablePosition, columnIndex) => {
-            state.setSelectedColumn({ tablePosition, columnIndex })
+          onUpdateStructureName={updateStructureName}
+          onSelectColumn={(tableId, columnIndex) => {
+            state.setSelectedColumn({ tableId, columnIndex })
             // Also select the table structure when a column is selected
-            // Find the table structure at the given position
-            let tableStructure = null
-            for (const [id, structure] of state.structures) {
-              if (structure.type === 'table' && 
-                  structure.position.row === tablePosition.row && 
-                  structure.position.col === tablePosition.col) {
-                tableStructure = structure
-                break
-              }
-            }
-            if (tableStructure) {
+            // Find the table structure by ID
+            let tableStructure = state.structures.get(tableId)
+            if (tableStructure && tableStructure.type === 'table') {
               state.setSelectedStructure(tableStructure)
             }
           }}
@@ -178,6 +191,89 @@ export const App: React.FC = () => {
           canMerge={canMergeCells()}
           canUnmerge={canUnmergeCells()}
           canCreateStructures={state.selectedCell !== null || state.selectedRange !== null}
+        />
+      )}
+
+      {/* Conflict Dialog */}
+      {state.showConflictDialog && state.conflictDialogData && (
+        <ConflictDialog
+          isOpen={state.showConflictDialog}
+          onClose={() => {
+            state.setShowConflictDialog(false)
+            state.setConflictDialogData(null)
+          }}
+          onKeepExisting={() => {
+            // Handle keeping existing values
+            if (state.conflictDialogData && state.draggedStructure) {
+              // Move structure with existing values taking priority
+              const newCellData = moveStructureCells(
+                state.draggedStructure, 
+                state.conflictDialogData.targetPosition, 
+                state.cellData, 
+                false // Don't overwrite existing
+              )
+              state.setCellData(newCellData)
+              
+              // Update structure position
+              const updatedStructure = moveStructurePosition(
+                state.draggedStructure, 
+                state.conflictDialogData.targetPosition
+              )
+              state.setStructures(prev => {
+                const newStructures = new Map(prev)
+                newStructures.set(updatedStructure.id, updatedStructure)
+                return newStructures
+              })
+              
+              // Update selected structure
+              state.setSelectedStructure(updatedStructure)
+            }
+            
+            // Clean up drag state
+            state.setIsDraggingStructure(false)
+            state.setDraggedStructure(null)
+            state.setDragOffset(null)
+            state.setDropTarget(null)
+            state.setShowConflictDialog(false)
+            state.setConflictDialogData(null)
+          }}
+          onReplaceWithNew={() => {
+            // Handle replacing with new values
+            if (state.conflictDialogData && state.draggedStructure) {
+              // Move structure with new values taking priority
+              const newCellData = moveStructureCells(
+                state.draggedStructure, 
+                state.conflictDialogData.targetPosition, 
+                state.cellData, 
+                true // Overwrite existing
+              )
+              state.setCellData(newCellData)
+              
+              // Update structure position
+              const updatedStructure = moveStructurePosition(
+                state.draggedStructure, 
+                state.conflictDialogData.targetPosition
+              )
+              state.setStructures(prev => {
+                const newStructures = new Map(prev)
+                newStructures.set(updatedStructure.id, updatedStructure)
+                return newStructures
+              })
+              
+              // Update selected structure
+              state.setSelectedStructure(updatedStructure)
+            }
+            
+            // Clean up drag state
+            state.setIsDraggingStructure(false)
+            state.setDraggedStructure(null)
+            state.setDragOffset(null)
+            state.setDropTarget(null)
+            state.setShowConflictDialog(false)
+            state.setConflictDialogData(null)
+          }}
+          conflictingCells={state.conflictDialogData.conflictingCells}
+          targetPosition={state.conflictDialogData.targetPosition}
         />
       )}
     </div>

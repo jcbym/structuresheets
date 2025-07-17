@@ -1,14 +1,39 @@
 import React from 'react'
-import { Structure, Cell, Array } from '../types'
+import { Structure, Cell, StructureArray } from '../types'
 import { getCellValue, getStructureAtPosition, generateUUID } from '../utils'
 import { MAX_ROWS, MAX_COLS } from '../constants'
+
+const createMultipleCells = (
+  startRow: number,
+  endRow: number,
+  startCol: number,
+  endCol: number,
+  cellData: Map<string, string>
+) => {
+  const cells: Cell[] = []
+  for (let r = startRow; r <= endRow; r++) {
+    for (let c = startCol; c <= endCol; c++) {
+      if (r < MAX_ROWS && c < MAX_COLS) {
+        cells.push({
+          type: 'cell',
+          id: generateUUID(),
+          startPosition: { row: r, col: c },
+          endPosition: { row: r, col: c },
+          value: getCellValue(r, c, cellData)
+        })
+      }
+    }
+  }
+  return cells
+}
 
 export const useStructureOperations = (
   cellData: Map<string, string>,
   structures: Map<string, Structure>,
   setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>,
   selectedCell: {row: number, col: number} | null,
-  selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null
+  selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null,
+  setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
 ) => {
   const createStructure = React.useCallback((type: Structure['type'], name: string, dimensions?: {rows: number, cols: number}) => {
     if (!selectedCell) return
@@ -23,35 +48,20 @@ export const useStructureOperations = (
         newStructure = {
           type: 'cell',
           id: generateUUID(),
-          position,
+          startPosition: position,
+          endPosition: position,
           name,
           value: getCellValue(row, col, cellData)
         }
         break
       
       case 'array':
-        const cells: Cell[] = []
         const arrayDims = dimensions || { rows: 1, cols: 1 }
-        
-        for (let r = 0; r < arrayDims.rows; r++) {
-          for (let c = 0; c < arrayDims.cols; c++) {
-            const cellRow = row + r
-            const cellCol = col + c
-            if (cellRow < MAX_ROWS && cellCol < MAX_COLS) {
-              cells.push({
-                type: 'cell',
-                id: generateUUID(),
-                position: { row: cellRow, col: cellCol },
-                value: getCellValue(cellRow, cellCol, cellData)
-              })
-            }
-          }
-        }
+        const cells = createMultipleCells(row, row + arrayDims.rows - 1, col, col + arrayDims.cols - 1, cellData)
 
         newStructure = {
           type: 'array',
           id: generateUUID(),
-          position,
           startPosition: { row, col },
           endPosition: { row: row + arrayDims.rows - 1, col: col + arrayDims.cols - 1 },
           name,
@@ -61,29 +71,16 @@ export const useStructureOperations = (
         break
 
       case 'table':
-        const arrays: Array[] = []
+        const arrays: StructureArray[] = []
         const tableDims = dimensions || { rows: 1, cols: 1 }
         
         // Create arrays for the table (simplified - each row becomes an array)
         for (let r = 0; r < tableDims.rows; r++) {
-          const rowCells: Cell[] = []
-          for (let c = 0; c < tableDims.cols; c++) {
-            const cellRow = row + r
-            const cellCol = col + c
-            if (cellRow < MAX_ROWS && cellCol < MAX_COLS) {
-              rowCells.push({
-                type: 'cell',
-                id: generateUUID(),
-                position: { row: cellRow, col: cellCol },
-                value: getCellValue(cellRow, cellCol, cellData)
-              })
-            }
-          }
+          const rowCells = createMultipleCells(row + r, row + r, col, col + tableDims.cols - 1, cellData)
           
           arrays.push({
             type: 'array',
             id: generateUUID(),
-            position: { row: row + r, col },
             startPosition: { row: row + r, col },
             endPosition: { row: row + r, col: col + tableDims.cols - 1 },
             cells: rowCells,
@@ -94,7 +91,6 @@ export const useStructureOperations = (
         newStructure = {
           type: 'table',
           id: generateUUID(),
-          position,
           startPosition: { row, col },
           endPosition: { row: row + tableDims.rows - 1, col: col + tableDims.cols - 1 },
           name,
@@ -108,7 +104,7 @@ export const useStructureOperations = (
         break
     }
 
-    // Set the main structure using UUID as key
+    // Set the main structure
     setStructures(prev => {
       const newStructures = new Map(prev)
       newStructures.set(newStructure.id, newStructure)
@@ -134,82 +130,63 @@ export const useStructureOperations = (
     } else {
       return // No selection
     }
-
-    const position = { row: startRow, col: startCol }
+    
     const dimensions = { rows: endRow - startRow + 1, cols: endCol - startCol + 1 }
-    const name = `${type}_${startRow}_${startCol}` // Auto-generate name
-
-    let newStructure: Structure
 
     switch (type) {
       case 'cell':
         // For cell type, create individual cell structures for each selected cell
+        const cellStructures = createMultipleCells(startRow, endRow, startCol, endCol, cellData);
+        
         setStructures(prev => {
           const newStructures = new Map(prev)
-          for (let r = startRow; r <= endRow; r++) {
-            for (let c = startCol; c <= endCol; c++) {
-              const cellStructure: Structure = {
-                type: 'cell',
-                id: generateUUID(),
-                position: { row: r, col: c },
-                name: `cell_${r}_${c}`,
-                value: getCellValue(r, c, cellData)
-              }
-              newStructures.set(cellStructure.id, cellStructure)
-            }
-          }
+          cellStructures.forEach(structure => {
+            newStructures.set(structure.id, structure)
+          })
           return newStructures
         })
+        
+        // Select the first created cell structure
+        if (cellStructures.length > 0) {
+          setSelectedStructure(cellStructures[0])
+        }
         return
 
       case 'array':
-        const cells: Cell[] = []
-        for (let r = startRow; r <= endRow; r++) {
-          for (let c = startCol; c <= endCol; c++) {
-            if (r < MAX_ROWS && c < MAX_COLS) {
-              cells.push({
-                type: 'cell',
-                id: generateUUID(),
-                position: { row: r, col: c },
-                value: getCellValue(r, c, cellData)
-              })
-            }
-          }
-        }
+        const cells = createMultipleCells(startRow, endRow, startCol, endCol, cellData)
 
-        newStructure = {
+        const newArrayStructure: Structure = {
           type: 'array',
           id: generateUUID(),
-          position,
           startPosition: { row: startRow, col: startCol },
           endPosition: { row: endRow, col: endCol },
-          name,
+          // No name initially
           cells,
           dimensions
         }
+        
+        // Set the structure in structures map
+        setStructures(prev => {
+          const newStructures = new Map(prev)
+          newStructures.set(newArrayStructure.id, newArrayStructure)
+          
+          return newStructures
+        })
+        
+        // Select the newly created structure
+        setSelectedStructure(newArrayStructure)
         break
 
       case 'table':
-        const arrays: Array[] = []
+        const arrays: StructureArray[] = []
         
         // Create arrays for each row in the selection
         for (let r = startRow; r <= endRow; r++) {
-          const rowCells: Cell[] = []
-          for (let c = startCol; c <= endCol; c++) {
-            if (r < MAX_ROWS && c < MAX_COLS) {
-              rowCells.push({
-                type: 'cell',
-                id: generateUUID(),
-                position: { row: r, col: c },
-                value: getCellValue(r, c, cellData)
-              })
-            }
-          }
+          const rowCells = createMultipleCells(r, r, startCol, endCol, cellData)
           
           arrays.push({
             type: 'array',
             id: generateUUID(),
-            position: { row: r, col: startCol },
             startPosition: { row: r, col: startCol },
             endPosition: { row: r, col: endCol },
             cells: rowCells,
@@ -217,13 +194,12 @@ export const useStructureOperations = (
           })
         }
 
-        newStructure = {
+        const newTableStructure: Structure = {
           type: 'table',
           id: generateUUID(),
-          position,
           startPosition: { row: startRow, col: startCol },
           endPosition: { row: endRow, col: endCol },
-          name,
+          // No name initially
           arrays,
           dimensions,
           hasHeaderRow: true,
@@ -231,17 +207,20 @@ export const useStructureOperations = (
           headerRows: 1,
           headerCols: 1
         }
+        
+        // Set the main structure in structures map
+        setStructures(prev => {
+          const newStructures = new Map(prev)
+          newStructures.set(newTableStructure.id, newTableStructure)
+          
+          return newStructures
+        })
+        
+        // Select the newly created structure
+        setSelectedStructure(newTableStructure)
         break
     }
-
-    // Set the main structure using UUID as key
-    setStructures(prev => {
-      const newStructures = new Map(prev)
-      newStructures.set(newStructure.id, newStructure)
-      
-      return newStructures
-    })
-  }, [selectedRange, selectedCell, cellData, setStructures])
+  }, [selectedRange, selectedCell, cellData, setStructures, setSelectedStructure])
 
   // Function to update table header settings
   const updateTableHeaders = React.useCallback((row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => {
@@ -280,10 +259,32 @@ export const useStructureOperations = (
     return getStructureAtPosition(row, col, structures)
   }, [structures])
 
+  const updateStructureName = React.useCallback((structureId: string, name: string) => {
+    setStructures(prev => {
+      const newStructures = new Map(prev)
+      const structure = newStructures.get(structureId)
+      if (structure) {
+        // Set name to undefined if empty string is passed to delete the name
+        const updatedStructure = { ...structure, name: name || undefined }
+        newStructures.set(structureId, updatedStructure)
+        
+        // Also update the selected structure if it's the same one
+        setSelectedStructure(current => {
+          if (current && current.id === structureId) {
+            return updatedStructure
+          }
+          return current
+        })
+      }
+      return newStructures
+    })
+  }, [setStructures, setSelectedStructure])
+
   return {
     createStructure,
     createStructureFromToolbar,
     updateTableHeaders,
-    getStructureAtPositionSafe
+    getStructureAtPositionSafe,
+    updateStructureName
   }
 }

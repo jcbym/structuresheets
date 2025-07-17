@@ -42,8 +42,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     const newHeaderRows = (table.headerRows || 1) + 1
     
     updateTableHeaders(
-      table.position.row,
-      table.position.col,
+      table.startPosition.row,
+      table.startPosition.col,
       true,
       table.hasHeaderCol || false,
       newHeaderRows,
@@ -59,8 +59,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     const newHeaderCols = (table.headerCols || 1) + 1
     
     updateTableHeaders(
-      table.position.row,
-      table.position.col,
+      table.startPosition.row,
+      table.startPosition.col,
       table.hasHeaderRow || false,
       true,
       table.headerRows,

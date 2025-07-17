@@ -103,27 +103,15 @@ export const getCellValue = (row: number, col: number, cellData: Map<string, str
 }
 
 export const getStructureAtPosition = (row: number, col: number, structures: Map<string, Structure>): Structure | undefined => {
-  // Search through all structures to find one that contains this position
+  const matches = []
+  // Search through all structures, find all structures containing this position
   for (const [id, structure] of structures) {
-    // For single cell structures, check exact position match
-    if (structure.type === 'cell') {
-      if (structure.position.row === row && structure.position.col === col) {
-        return structure
-      }
-    }
-    // For array and table structures, check if position is within bounds
-    else if (structure.type === 'array' || structure.type === 'table') {
-      const { startPosition, endPosition } = structure
-      if (row >= startPosition.row && row <= endPosition.row &&
-          col >= startPosition.col && col <= endPosition.col) {
-        return structure
-      }
-    }
-    // For column structures, check if position matches
-    else if (structure.type === 'column') {
-      if (structure.position.row === row && structure.position.col === col) {
-        return structure
-      }
+    const { startPosition, endPosition } = structure
+    if (row >= startPosition.row && row <= endPosition.row &&
+        col >= startPosition.col && col <= endPosition.col) {
+      matches.push(structure)
+      // TEMPORARY: return first match
+      return structure
     }
   }
   return undefined
@@ -281,4 +269,178 @@ export const isValidPosition = (row: number, col: number): boolean => {
 
 export const isValidRange = (startRow: number, startCol: number, endRow: number, endCol: number): boolean => {
   return isValidPosition(startRow, startCol) && isValidPosition(endRow, endCol)
+}
+
+// Drag and drop utilities
+export const getCellsInStructure = (structure: Structure, cellData: Map<string, string>): Array<{row: number, col: number, value: string}> => {
+  const cells = []
+  const { startPosition, endPosition } = structure
+  
+  for (let row = startPosition.row; row <= endPosition.row; row++) {
+    for (let col = startPosition.col; col <= endPosition.col; col++) {
+      const value = cellData.get(getCellKey(row, col)) || ''
+      cells.push({ row, col, value })
+    }
+  }
+  
+  return cells
+}
+
+export const detectConflicts = (
+  targetPosition: Position,
+  structureCells: Array<{row: number, col: number, value: string}>,
+  cellData: Map<string, string>,
+  sourceStructure?: Structure
+): Array<{row: number, col: number, existingValue: string, newValue: string}> => {
+  const conflicts = []
+  
+  // Create a set of source cell positions to exclude from conflict detection
+  const sourceCellPositions = new Set<string>()
+  if (sourceStructure) {
+    for (let row = sourceStructure.startPosition.row; row <= sourceStructure.endPosition.row; row++) {
+      for (let col = sourceStructure.startPosition.col; col <= sourceStructure.endPosition.col; col++) {
+        sourceCellPositions.add(`${row}-${col}`)
+      }
+    }
+  }
+  
+  for (const cell of structureCells) {
+    const targetRow = targetPosition.row + (cell.row - structureCells[0].row)
+    const targetCol = targetPosition.col + (cell.col - structureCells[0].col)
+    const targetKey = `${targetRow}-${targetCol}`
+    
+    // Skip conflict detection if the target cell is part of the source structure
+    if (sourceCellPositions.has(targetKey)) {
+      continue
+    }
+    
+    const existingValue = cellData.get(targetKey) || ''
+    
+    // Only consider it a conflict if both values are non-empty and different
+    if (existingValue && cell.value && existingValue !== cell.value) {
+      conflicts.push({
+        row: targetRow,
+        col: targetCol,
+        existingValue,
+        newValue: cell.value
+      })
+    }
+  }
+  
+  return conflicts
+}
+
+export const moveStructureCells = (
+  structure: Structure,
+  targetPosition: Position,
+  cellData: Map<string, string>,
+  overwriteExisting: boolean = false
+): Map<string, string> => {
+  const newCellData = new Map(cellData)
+  const structureCells = getCellsInStructure(structure, cellData)
+  
+  // Clear old positions
+  for (const cell of structureCells) {
+    newCellData.delete(getCellKey(cell.row, cell.col))
+  }
+  
+  // Set new positions
+  for (const cell of structureCells) {
+    const newRow = targetPosition.row + (cell.row - structure.startPosition.row)
+    const newCol = targetPosition.col + (cell.col - structure.startPosition.col)
+    
+    if (isValidPosition(newRow, newCol)) {
+      const existingValue = newCellData.get(getCellKey(newRow, newCol)) || ''
+      const newValue = cell.value
+      
+      // Determine final value based on merge strategy
+      let finalValue = newValue
+      if (existingValue && newValue) {
+        // Both values exist - use override strategy
+        finalValue = overwriteExisting ? newValue : existingValue
+      } else if (existingValue) {
+        // Only existing value - keep it
+        finalValue = existingValue
+      }
+      // If only new value or both empty, use new value
+      
+      if (finalValue) {
+        newCellData.set(getCellKey(newRow, newCol), finalValue)
+      }
+    }
+  }
+  
+  return newCellData
+}
+
+export const moveStructurePosition = (structure: Structure, targetPosition: Position): Structure => {
+  const deltaRow = targetPosition.row - structure.startPosition.row
+  const deltaCol = targetPosition.col - structure.startPosition.col
+  
+  const newStartPosition = targetPosition
+  const newEndPosition = {
+    row: structure.endPosition.row + deltaRow,
+    col: structure.endPosition.col + deltaCol
+  }
+  
+  // Update internal positions for different structure types
+  if (structure.type === 'array') {
+    const arrayStructure = structure as any
+    const updatedCells = arrayStructure.cells.map((cell: any) => ({
+      ...cell,
+      startPosition: {
+        row: cell.startPosition.row + deltaRow,
+        col: cell.startPosition.col + deltaCol
+      },
+      endPosition: {
+        row: cell.endPosition.row + deltaRow,
+        col: cell.endPosition.col + deltaCol
+      }
+    }))
+    
+    return {
+      ...arrayStructure,
+      startPosition: newStartPosition,
+      endPosition: newEndPosition,
+      cells: updatedCells
+    } as Structure
+  } else if (structure.type === 'table') {
+    const tableStructure = structure as any
+    const updatedArrays = tableStructure.arrays.map((arr: any) => ({
+      ...arr,
+      startPosition: {
+        row: arr.startPosition.row + deltaRow,
+        col: arr.startPosition.col + deltaCol
+      },
+      endPosition: {
+        row: arr.endPosition.row + deltaRow,
+        col: arr.endPosition.col + deltaCol
+      },
+      cells: arr.cells.map((cell: any) => ({
+        ...cell,
+        startPosition: {
+          row: cell.startPosition.row + deltaRow,
+          col: cell.startPosition.col + deltaCol
+        },
+        endPosition: {
+          row: cell.endPosition.row + deltaRow,
+          col: cell.endPosition.col + deltaCol
+        }
+      }))
+    }))
+    
+    return {
+      ...tableStructure,
+      startPosition: newStartPosition,
+      endPosition: newEndPosition,
+      arrays: updatedArrays
+    } as Structure
+  } else {
+    // For cell and column types, just update positions
+    return {
+      ...structure,
+      startPosition: newStartPosition,
+      endPosition: newEndPosition
+    }
+  }
 }

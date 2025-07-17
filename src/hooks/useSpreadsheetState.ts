@@ -1,36 +1,5 @@
 import React from 'react'
-import { SpreadsheetState, Position, Structure, MergedCell, SelectionRange, ResizeType } from '../types'
-
-const initialState: SpreadsheetState = {
-  cellData: new Map(),
-  structures: new Map(),
-  mergedCells: new Map(),
-  selectedCell: null,
-  selectedRange: null,
-  selectedStructure: null,
-  selectedColumn: null,
-  isDragging: false,
-  dragStart: null,
-  scrollTop: 0,
-  scrollLeft: 0,
-  contextMenu: null,
-  hoveredHeaderCell: null,
-  showAddColumnButton: false,
-  columnWidths: new Map(),
-  rowHeights: new Map(),
-  isResizing: false,
-  resizeType: null,
-  resizeIndex: null,
-  resizeStartPos: 0,
-  resizeStartSize: 0,
-  isResizingStructure: false,
-  structureResizeDirection: null,
-  structureResizeStartDimensions: null,
-  startEditing: null,
-  expandedTableColumns: new Set(),
-  structurePanelCollapsed: false,
-  structurePanelWidth: 320,
-}
+import { Position, Structure, MergedCell, SelectionRange, ResizeType } from '../types'
 
 export const useSpreadsheetState = () => {
   // Individual state hooks for better granular control
@@ -40,7 +9,7 @@ export const useSpreadsheetState = () => {
   const [selectedCell, setSelectedCell] = React.useState<{row: number, col: number} | null>(null)
   const [selectedRange, setSelectedRange] = React.useState<SelectionRange | null>(null)
   const [selectedStructure, setSelectedStructure] = React.useState<Structure | null>(null)
-  const [selectedColumn, setSelectedColumn] = React.useState<{tablePosition: Position, columnIndex: number} | null>(null)
+  const [selectedColumn, setSelectedColumn] = React.useState<{tableId: string, columnIndex: number} | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
   const [dragStart, setDragStart] = React.useState<Position | null>(null)
   const [scrollTop, setScrollTop] = React.useState(0)
@@ -50,18 +19,29 @@ export const useSpreadsheetState = () => {
   const [showAddColumnButton, setShowAddColumnButton] = React.useState(false)
   const [columnWidths, setColumnWidths] = React.useState<Map<number, number>>(new Map())
   const [rowHeights, setRowHeights] = React.useState<Map<number, number>>(new Map())
-  const [isResizing, setIsResizing] = React.useState(false)
-  const [resizeType, setResizeType] = React.useState<ResizeType | null>(null)
-  const [resizeIndex, setResizeIndex] = React.useState<number | null>(null)
-  const [resizeStartPos, setResizeStartPos] = React.useState(0)
-  const [resizeStartSize, setResizeStartSize] = React.useState(0)
+  const [isResizingSheetHeader, setIsResizingSheetHeader] = React.useState(false)
+  const [sheetHeaderResizeType, setSheetHeaderResizeType] = React.useState<ResizeType | null>(null)
+  const [sheetHeaderResizeIndex, setSheetHeaderResizeIndex] = React.useState<number | null>(null)
+  const [sheetHeaderResizeStartPos, setSheetHeaderResizeStartPos] = React.useState(0)
+  const [sheetHeaderResizeStartSize, setSheetHeaderResizeStartSize] = React.useState(0)
   const [isResizingStructure, setIsResizingStructure] = React.useState(false)
-  const [structureResizeDirection, setStructureResizeDirection] = React.useState<'left' | 'right' | 'top' | 'bottom' | 'corner' | null>(null)
+  const [structureResizeDirection, setStructureResizeDirection] = React.useState<'left' | 'right' | 'top' | 'bottom' | 'corner-tl' | 'corner-tr' | 'corner-bl' | 'corner-br' | null>(null)
   const [structureResizeStartDimensions, setStructureResizeStartDimensions] = React.useState<{ rows: number, cols: number } | null>(null)
+  const [structureResizeStartX, setStructureResizeStartX] = React.useState(0)
+  const [structureResizeStartY, setStructureResizeStartY] = React.useState(0)
   const [startEditing, setStartEditing] = React.useState<{row: number, col: number} | null>(null)
   const [expandedTableColumns, setExpandedTableColumns] = React.useState<Set<string>>(new Set())
   const [structurePanelCollapsed, setStructurePanelCollapsed] = React.useState(false)
   const [structurePanelWidth, setStructurePanelWidth] = React.useState(320)
+  const [isDraggingStructure, setIsDraggingStructure] = React.useState(false)
+  const [draggedStructure, setDraggedStructure] = React.useState<Structure | null>(null)
+  const [dragOffset, setDragOffset] = React.useState<Position | null>(null)
+  const [dropTarget, setDropTarget] = React.useState<Position | null>(null)
+  const [showConflictDialog, setShowConflictDialog] = React.useState(false)
+  const [conflictDialogData, setConflictDialogData] = React.useState<{
+    targetPosition: Position
+    conflictingCells: Array<{row: number, col: number, existingValue: string, newValue: string}>
+  } | null>(null)
 
   return {
     // State values
@@ -72,8 +52,8 @@ export const useSpreadsheetState = () => {
     selectedRange,
     selectedStructure,
     selectedColumn,
-    isDragging,
-    dragStart,
+    isDraggingSheetHeader: isDragging,
+    sheetHeaderDragStart: dragStart,
     scrollTop,
     scrollLeft,
     contextMenu,
@@ -81,18 +61,26 @@ export const useSpreadsheetState = () => {
     showAddColumnButton,
     columnWidths,
     rowHeights,
-    isResizing,
-    resizeType,
-    resizeIndex,
-    resizeStartPos,
-    resizeStartSize,
+    isResizingSheetHeader,
+    sheetHeaderResizeType,
+    sheetHeaderResizeIndex,
+    sheetHeaderResizeStartPos,
+    sheetHeaderResizeStartSize,
     isResizingStructure,
     structureResizeDirection,
     structureResizeStartDimensions,
+    structureResizeStartX,
+    structureResizeStartY,
     startEditing,
     expandedTableColumns,
     structurePanelCollapsed,
     structurePanelWidth,
+    isDraggingStructure,
+    draggedStructure,
+    dragOffset,
+    dropTarget,
+    showConflictDialog,
+    conflictDialogData,
 
     // State setters
     setCellData,
@@ -111,17 +99,25 @@ export const useSpreadsheetState = () => {
     setShowAddColumnButton,
     setColumnWidths,
     setRowHeights,
-    setIsResizing,
-    setResizeType,
-    setResizeIndex,
-    setResizeStartPos,
-    setResizeStartSize,
+    setIsResizingSheetHeader,
+    setSheetHeaderResizeType,
+    setSheetHeaderResizeIndex,
+    setSheetHeaderResizeStartPos,
+    setSheetHeaderResizeStartSize,
     setIsResizingStructure,
     setStructureResizeDirection,
     setStructureResizeStartDimensions,
+    setStructureResizeStartX,
+    setStructureResizeStartY,
     setStartEditing,
     setExpandedTableColumns,
     setStructurePanelCollapsed,
     setStructurePanelWidth,
+    setIsDraggingStructure,
+    setDraggedStructure,
+    setDragOffset,
+    setDropTarget,
+    setShowConflictDialog,
+    setConflictDialogData,
   }
 }

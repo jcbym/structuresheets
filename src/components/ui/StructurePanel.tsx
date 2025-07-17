@@ -2,6 +2,71 @@ import React from 'react'
 import { StructurePanelProps, Table } from '../../types'
 import { COLUMN_LETTERS } from '../../constants'
 
+// Name input component for structures without names
+const NameInput: React.FC<{
+  structureId: string
+  onUpdateName: (structureId: string, name: string) => void
+  placeholder: string
+}> = ({ structureId, onUpdateName, placeholder }) => {
+  const [name, setName] = React.useState('')
+  const [isFocused, setIsFocused] = React.useState(true)
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    // Auto-focus the input when component mounts
+    if (inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [])
+
+  const handleSubmit = () => {
+    if (name.trim()) {
+      onUpdateName(structureId, name.trim())
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSubmit()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setName('')
+      if (inputRef.current) {
+        inputRef.current.blur()
+      }
+    }
+  }
+
+  const handleBlur = () => {
+    setIsFocused(false)
+    if (name.trim()) {
+      handleSubmit()
+    }
+  }
+
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onBlur={handleBlur}
+        onFocus={() => setIsFocused(true)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 text-sm border-2 border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-blue-50"
+      />
+      {isFocused && (
+        <div className="absolute -bottom-6 left-0 text-xs text-gray-500">
+          Press Enter to save, Esc to cancel
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const StructurePanel: React.FC<StructurePanelProps> = ({ 
   structures, 
   selectedStructure, 
@@ -10,6 +75,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   onUpdateTableHeaders,
   onSelectColumn,
   onToggleTableColumns,
+  onUpdateStructureName,
   isCollapsed,
   width,
   onToggleCollapse,
@@ -18,6 +84,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   const [isResizing, setIsResizing] = React.useState(false)
   const [startX, setStartX] = React.useState(0)
   const [startWidth, setStartWidth] = React.useState(0)
+  const [isEditingName, setIsEditingName] = React.useState(false)
+  const [editingNameValue, setEditingNameValue] = React.useState('')
 
   // Get the current structure from the structures map to ensure we have the latest version
   const currentStructure = React.useMemo(() => {
@@ -101,36 +169,83 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
           {
             <>
               {/* Structure title */}
-              {currentStructure.name ? (
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-baseline">
-                    <h3 className="font-bold text-lg mr-2">{currentStructure.name}</h3>
-                    <span className="text-sm text-gray-500 capitalize">({currentStructure.type})</span>
-                  </div>
-                  <button
-                    onClick={onToggleCollapse}
-                    className="p-1 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
-                    title="Collapse Structure Panel"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M10 2L4 8l6 6V2z"/>
-                    </svg>
-                  </button>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-baseline flex-1 mr-2">
+                  {isEditingName ? (
+                    <input
+                      type="text"
+                      value={editingNameValue}
+                      onChange={(e) => setEditingNameValue(e.target.value)}
+                      onBlur={() => {
+                        const trimmedName = editingNameValue.trim()
+                        // Always call update if the name changed, including when deleting (empty string)
+                        if (trimmedName !== (currentStructure.name || '')) {
+                          // Pass empty string to delete the name, or the new name to set it
+                          onUpdateStructureName(currentStructure.id, trimmedName || '')
+                        }
+                        setIsEditingName(false)
+                        setEditingNameValue('')
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          const trimmedName = editingNameValue.trim()
+                          // Always call update if the name changed, including when deleting (empty string)
+                          if (trimmedName !== (currentStructure.name || '')) {
+                            // Pass empty string to delete the name, or the new name to set it
+                            onUpdateStructureName(currentStructure.id, trimmedName || '')
+                          }
+                          setIsEditingName(false)
+                          setEditingNameValue('')
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault()
+                          setIsEditingName(false)
+                          setEditingNameValue('')
+                        }
+                      }}
+                      autoFocus
+                      placeholder={`Enter ${currentStructure.type} name`}
+                      className="font-bold text-lg bg-transparent border-b-2 border-blue-500 outline-none focus:border-blue-600 min-w-0 flex-1"
+                    />
+                  ) : (
+                    <>
+                      {currentStructure.name ? (
+                        <h3 
+                          className="font-bold text-lg mr-2 cursor-pointer hover:text-blue-600 transition-colors"
+                          onClick={() => {
+                            setIsEditingName(true)
+                            setEditingNameValue(currentStructure.name || '')
+                          }}
+                          title="Click to edit name"
+                        >
+                          {currentStructure.name}
+                        </h3>
+                      ) : (
+                        <h3 
+                          className="font-bold text-lg mr-2 cursor-pointer hover:text-blue-600 transition-colors italic text-gray-500"
+                          onClick={() => {
+                            setIsEditingName(true)
+                            setEditingNameValue('')
+                          }}
+                          title="Click to add name"
+                        >
+                          Add {currentStructure.type} name
+                        </h3>
+                      )}
+                      <span className="text-sm text-gray-500 capitalize">({currentStructure.type})</span>
+                    </>
+                  )}
                 </div>
-              ) : (
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-lg capitalize">{currentStructure.type}</h3>
-                  <button
-                    onClick={onToggleCollapse}
-                    className="p-1 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
-                    title="Collapse Structure Panel"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M10 2L4 8l6 6V2z"/>
-                    </svg>
-                  </button>
-                </div>
-              )}
+                <button
+                  onClick={onToggleCollapse}
+                  className="p-1 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors flex-shrink-0"
+                  title="Collapse Structure Panel"
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M10 2L4 8l6 6V2z"/>
+                  </svg>
+                </button>
+              </div>
 
               {/* Table Header Options */}
               {tableStructure && (
@@ -142,8 +257,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                         type="checkbox"
                         checked={tableStructure.hasHeaderRow || false}
                         onChange={(e) => onUpdateTableHeaders(
-                          currentStructure.position.row,
-                          currentStructure.position.col,
+                          currentStructure.startPosition.row,
+                          currentStructure.startPosition.col,
                           e.target.checked,
                           tableStructure.hasHeaderCol || false,
                           tableStructure.headerRows,
@@ -163,8 +278,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                           max="10"
                           value={tableStructure.headerRows || 1}
                           onChange={(e) => onUpdateTableHeaders(
-                            currentStructure.position.row,
-                            currentStructure.position.col,
+                            currentStructure.startPosition.row,
+                            currentStructure.startPosition.col,
                             tableStructure.hasHeaderRow || false,
                             tableStructure.hasHeaderCol || false,
                             parseInt(e.target.value) || 1,
@@ -180,8 +295,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                         type="checkbox"
                         checked={tableStructure.hasHeaderCol || false}
                         onChange={(e) => onUpdateTableHeaders(
-                          currentStructure.position.row,
-                          currentStructure.position.col,
+                          currentStructure.startPosition.row,
+                          currentStructure.startPosition.col,
                           tableStructure.hasHeaderRow || false,
                           e.target.checked,
                           tableStructure.headerRows,
@@ -201,8 +316,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                           max="10"
                           value={tableStructure.headerCols || 1}
                           onChange={(e) => onUpdateTableHeaders(
-                            currentStructure.position.row,
-                            currentStructure.position.col,
+                            currentStructure.startPosition.row,
+                            currentStructure.startPosition.col,
                             tableStructure.hasHeaderRow || false,
                             tableStructure.hasHeaderCol || false,
                             tableStructure.headerRows,
@@ -234,8 +349,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                       {Array.from({ length: tableStructure.dimensions.cols }, (_, index) => {
                         const columnIndex = tableStructure.startPosition.col + index
                         const columnLetter = COLUMN_LETTERS[columnIndex]
-                        const isSelected = selectedColumn?.tablePosition.row === tableStructure.position.row &&
-                                         selectedColumn?.tablePosition.col === tableStructure.position.col &&
+                        const isSelected = selectedColumn?.tableId === tableStructure.id &&
                                          selectedColumn?.columnIndex === index
                         
                         return (
@@ -244,7 +358,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                             className={`flex items-center space-x-2 p-2 rounded cursor-pointer transition-colors ${
                               isSelected ? 'bg-green-100 border border-green-300' : 'hover:bg-gray-50'
                             }`}
-                            onClick={() => onSelectColumn(tableStructure.position, index)}
+                            onClick={() => onSelectColumn(tableStructure.id, index)}
                           >
                             <span className="text-xs text-gray-500">▪</span>
                             <span className="text-sm font-mono">{columnLetter}</span>
