@@ -47,7 +47,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       <button
         onClick={() => onCreateStructure('table')}
         disabled={!hasSelection}
-        className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+        className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
       >
         Table
       </button>

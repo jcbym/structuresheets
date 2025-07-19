@@ -239,16 +239,16 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     
     if (structure && isHeaderCell(row, col, structure) && structure.type === 'table') {
       // Use green background to match table border color
-      return { ...baseStyle, backgroundColor: '#10b981', opacity: 0.8 }
+      return { ...baseStyle, backgroundColor: '#00A63E', opacity: 0.8 }
     }
     
     // Add transparent background colors for structure types
     if (structure?.type === 'table') {
-      return { ...baseStyle, backgroundColor: 'rgba(34, 197, 94, 0.1)' } // Transparent light green
+      return { ...baseStyle, backgroundColor: '#00A63E', opacity: 0.1 } // Transparent light green
     }
     
     if (structure?.type === 'array') {
-      return { ...baseStyle, backgroundColor: 'rgba(59, 130, 246, 0.1)' } // Transparent light blue
+      return { ...baseStyle, backgroundColor: '#2B7FFF', opacity: 0.1 } // Transparent light blue
     }
     
     return baseStyle
@@ -1065,7 +1065,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         const isSelected = selectedStructure && selectedStructure.id === structure.id
 
         const borderColor = structure.type === 'cell' ? 'border-black' :
-                           structure.type === 'array' ? 'border-blue-500' : 'border-green-500'
+                           structure.type === 'array' ? 'border-blue-500' : 'border-green-600'
 
         overlays.push(
           <div
@@ -1271,7 +1271,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         overlays.push(
           <div
             key={`column-selection-${selectedColIndex}`}
-            className="absolute pointer-events-none border-4 border-green-600"
+            className="absolute pointer-events-none border-4 border-green-700"
             style={{
               left: columnLeft,
               top: tableTop,
@@ -1338,9 +1338,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       
       // Choose tab color based on structure type (same for both named and unnamed structures)
       const tabBgColor = selectedStructure.type === 'cell' ? 'bg-black' :
-                        selectedStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-500'
+                        selectedStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-600'
       const borderColor = selectedStructure.type === 'cell' ? 'border-black' :
-                         selectedStructure.type === 'array' ? 'border-blue-500' : 'border-green-500'
+                         selectedStructure.type === 'array' ? 'border-blue-500' : 'border-green-600'
       
       tabs.push(
         <div
@@ -1432,9 +1432,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       
       // Choose tab color based on structure type
       const tabBgColor = hoveredStructure.type === 'cell' ? 'bg-black' :
-                        hoveredStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-500'
+                        hoveredStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-600'
       const borderColor = hoveredStructure.type === 'cell' ? 'border-black' :
-                         hoveredStructure.type === 'array' ? 'border-blue-500' : 'border-green-500'
+                         hoveredStructure.type === 'array' ? 'border-blue-500' : 'border-green-600'
       
       tabs.push(
         <div
@@ -1587,7 +1587,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         // Add green column borders for tables (but not individual cell selection borders)
         let borderClass = 'border border-gray-300'
         if (structure && structure.type === 'table') {
-          borderClass = 'border-l-1 border-r-1 border-t border-b border-l-green-500 border-r-green-500 border-t-gray-300 border-b-gray-300'
+          borderClass = 'border-l-1 border-r-1 border-t border-b border-l-green-600 border-r-green-600 border-t-gray-300 border-b-gray-300'
         }
 
         cells.push(
@@ -1659,7 +1659,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   //     return (
   //       <button
-  //         className="absolute bg-green-500 bg-opacity-100 border border-white flex items-center justify-center text-white font-bold text-sm hover:bg-opacity-90 transition-all duration-200"
+  //         className="absolute bg-green-600 bg-opacity-100 border border-white flex items-center justify-center text-white font-bold text-sm hover:bg-opacity-90 transition-all duration-200"
   //         onClick={() => {
   //           // Find the table structure to add column to
   //           for (const [key, structure] of structures) {

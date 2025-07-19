@@ -91,7 +91,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   const currentStructure = React.useMemo(() => {
     if (!selectedStructure) return null
     
-    // Use the structure's UUID to fetch the latest version from the structures map
+    // Fetch the latest version from the structures map
     return structures.get(selectedStructure.id) || selectedStructure
   }, [selectedStructure, structures])
 
