@@ -8,7 +8,7 @@ import { useSpreadsheetState } from '../hooks/useSpreadsheetState'
 import { useCellOperations } from '../hooks/useCellOperations'
 import { useMergeOperations } from '../hooks/useMergeOperations'
 import { useStructureOperations } from '../hooks/useStructureOperations'
-import { moveStructureCells, moveStructurePosition } from '../utils'
+import { moveStructureCells, moveStructurePosition } from '../utils/structureUtils'
 
 export const App: React.FC = () => {
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -18,8 +18,6 @@ export const App: React.FC = () => {
   
   // Use custom hooks for operations
   const { updateCell } = useCellOperations(
-    state.cellData, 
-    state.setCellData, 
     state.structures, 
     state.setStructures, 
     state.mergedCells, 
@@ -29,6 +27,7 @@ export const App: React.FC = () => {
   const { mergeCells, unmergeCells, canMergeCells, canUnmergeCells } = useMergeOperations(
     state.cellData,
     state.setCellData,
+    state.structures,
     state.mergedCells,
     state.setMergedCells,
     state.selectedRange,
@@ -38,13 +37,12 @@ export const App: React.FC = () => {
   )
   
   const { 
-    createStructure, 
     createStructureFromToolbar, 
     updateTableHeaders, 
     getStructureAtPositionSafe,
-    updateStructureName
+    updateStructureName,
+    rotateArray
   } = useStructureOperations(
-    state.cellData,
     state.structures,
     state.setStructures,
     state.selectedCell,
@@ -88,6 +86,10 @@ export const App: React.FC = () => {
               sheetHeaderDragStart={state.sheetHeaderDragStart}
               sheetHeaderResizeStartPos={state.sheetHeaderResizeStartPos}
               sheetHeaderResizeStartSize={state.sheetHeaderResizeStartSize}
+              isDraggingColumn={state.isDraggingColumn}
+              draggedColumn={state.draggedColumn}
+              columnDragStartX={state.columnDragStartX}
+              columnDropTarget={state.columnDropTarget}
               isResizingStructure={state.isResizingStructure}
               structureResizeDirection={state.structureResizeDirection}
               structureResizeStartDimensions={state.structureResizeStartDimensions}
@@ -123,6 +125,10 @@ export const App: React.FC = () => {
               setSheetHeaderResizeIndex={state.setSheetHeaderResizeIndex}
               setSheetHeaderResizeStartPos={state.setSheetHeaderResizeStartPos}
               setSheetHeaderResizeStartSize={state.setSheetHeaderResizeStartSize}
+              setIsDraggingColumn={state.setIsDraggingColumn}
+              setDraggedColumn={state.setDraggedColumn}
+              setColumnDragStartX={state.setColumnDragStartX}
+              setColumnDropTarget={state.setColumnDropTarget}
               setColumnWidths={state.setColumnWidths}
               setRowHeights={state.setRowHeights}
               setIsDraggingStructure={state.setIsDraggingStructure}
@@ -143,7 +149,6 @@ export const App: React.FC = () => {
           selectedStructure={state.selectedStructure}
           selectedColumn={state.selectedColumn}
           expandedTableColumns={state.expandedTableColumns}
-          onCreateStructure={createStructure}
           onUpdateTableHeaders={updateTableHeaders}
           onUpdateStructureName={updateStructureName}
           onSelectColumn={(tableId, columnIndex) => {
@@ -188,6 +193,7 @@ export const App: React.FC = () => {
           getStructureAtPositionSafe={getStructureAtPositionSafe}
           updateTableHeaders={updateTableHeaders}
           createStructureFromToolbar={createStructureFromToolbar}
+          rotateArray={rotateArray}
           canMerge={canMergeCells()}
           canUnmerge={canUnmergeCells()}
           canCreateStructures={state.selectedCell !== null || state.selectedRange !== null}

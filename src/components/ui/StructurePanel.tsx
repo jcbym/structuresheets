@@ -1,6 +1,7 @@
 import React from 'react'
 import { StructurePanelProps, Table } from '../../types'
 import { COLUMN_LETTERS } from '../../constants'
+import { getDimensions } from '../../utils/structureUtils'
 
 // Name input component for structures without names
 const NameInput: React.FC<{
@@ -346,7 +347,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   
                   {expandedTableColumns.has(tableStructure.id) && (
                     <div className="space-y-1 ml-4 max-h-40 overflow-y-auto">
-                      {Array.from({ length: tableStructure.dimensions.cols }, (_, index) => {
+                      {Array.from({ length: getDimensions(tableStructure).cols }, (_, index) => {
                         const columnIndex = tableStructure.startPosition.col + index
                         const columnLetter = COLUMN_LETTERS[columnIndex]
                         const isSelected = selectedColumn?.tableId === tableStructure.id &&

@@ -1,10 +1,11 @@
 import React from 'react'
-import { MergedCell, SelectionRange } from '../types'
-import { getCellKey, getMergedCellKey, getMergedCellContaining, getCellValue } from '../utils'
+import { MergedCell, SelectionRange, Structure } from '../types'
+import { getCellKey, getMergedCellKey, getMergedCellContaining, getCellValue } from '../utils/structureUtils'
 
 export const useMergeOperations = (
   cellData: Map<string, string>,
   setCellData: React.Dispatch<React.SetStateAction<Map<string, string>>>,
+  structures: Map<string, Structure>,
   mergedCells: Map<string, MergedCell>,
   setMergedCells: React.Dispatch<React.SetStateAction<Map<string, MergedCell>>>,
   selectedRange: SelectionRange | null,
@@ -25,7 +26,7 @@ export const useMergeOperations = (
     let mergedValue = ''
     for (let r = minRow; r <= maxRow; r++) {
       for (let c = minCol; c <= maxCol; c++) {
-        const value = getCellValue(r, c, cellData)
+        const value = getCellValue(r, c, structures)
         if (value && !mergedValue) {
           mergedValue = value
         }

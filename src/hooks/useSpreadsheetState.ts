@@ -42,6 +42,10 @@ export const useSpreadsheetState = () => {
     targetPosition: Position
     conflictingCells: Array<{row: number, col: number, existingValue: string, newValue: string}>
   } | null>(null)
+  const [isDraggingColumn, setIsDraggingColumn] = React.useState(false)
+  const [draggedColumn, setDraggedColumn] = React.useState<{tableId: string, columnIndex: number} | null>(null)
+  const [columnDragStartX, setColumnDragStartX] = React.useState(0)
+  const [columnDropTarget, setColumnDropTarget] = React.useState<{tableId: string, targetColumnIndex: number} | null>(null)
 
   return {
     // State values
@@ -81,6 +85,10 @@ export const useSpreadsheetState = () => {
     dropTarget,
     showConflictDialog,
     conflictDialogData,
+    isDraggingColumn,
+    draggedColumn,
+    columnDragStartX,
+    columnDropTarget,
 
     // State setters
     setCellData,
@@ -119,5 +127,9 @@ export const useSpreadsheetState = () => {
     setDropTarget,
     setShowConflictDialog,
     setConflictDialogData,
+    setIsDraggingColumn,
+    setDraggedColumn,
+    setColumnDragStartX,
+    setColumnDropTarget,
   }
 }

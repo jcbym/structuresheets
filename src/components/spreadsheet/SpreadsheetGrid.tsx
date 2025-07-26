@@ -1,5 +1,5 @@
 import React from 'react'
-import { Structure, MergedCell, Position } from '../../types'
+import { Structure, MergedCell, Position, StructureArray, Table } from '../../types'
 import { 
   calculateVisibleCols, 
   calculateVisibleRows, 
@@ -7,21 +7,24 @@ import {
   getRowPosition, 
   getColumnWidth, 
   getRowHeight, 
-  shouldRenderCell, 
-  getMergedCellContaining,
-  isCellInRange,
-  isTableHeader,
   getHeaderHeight,
   getHeaderWidth,
+  getNextCell
+} from '../../utils/sheetUtils'
+import {
+  shouldRenderCell, 
+  getMergedCellContaining,
+  getDimensions,
+  isCellInRange,
+  isTableHeader,
   getHeaderLevel,
   getStructureAtPosition,
-  getNextCell,
-  getStructureKey,
   getCellsInStructure,
   detectConflicts,
   moveStructureCells,
-  moveStructurePosition
-} from '../../utils'
+  moveStructurePosition,
+  getCellValue
+} from '../../utils/structureUtils'
 import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE, MAX_ROWS } from '../../constants'
 
 interface SpreadsheetGridProps {
@@ -47,6 +50,10 @@ interface SpreadsheetGridProps {
   sheetHeaderDragStart: {row: number, col: number} | null
   sheetHeaderResizeStartPos: number
   sheetHeaderResizeStartSize: number
+  isDraggingColumn: boolean
+  draggedColumn: {tableId: string, columnIndex: number} | null
+  columnDragStartX: number
+  columnDropTarget: {tableId: string, targetColumnIndex: number} | null
   isResizingStructure: boolean
   structureResizeDirection: 'left' | 'right' | 'top' | 'bottom' | 'corner-tl' | 'corner-tr' | 'corner-bl' | 'corner-br' | null
   structureResizeStartDimensions: { rows: number, cols: number } | null
@@ -82,6 +89,10 @@ interface SpreadsheetGridProps {
   setSheetHeaderResizeIndex: React.Dispatch<React.SetStateAction<number | null>>
   setSheetHeaderResizeStartPos: React.Dispatch<React.SetStateAction<number>>
   setSheetHeaderResizeStartSize: React.Dispatch<React.SetStateAction<number>>
+  setIsDraggingColumn: React.Dispatch<React.SetStateAction<boolean>>
+  setDraggedColumn: React.Dispatch<React.SetStateAction<{tableId: string, columnIndex: number} | null>>
+  setColumnDragStartX: React.Dispatch<React.SetStateAction<number>>
+  setColumnDropTarget: React.Dispatch<React.SetStateAction<{tableId: string, targetColumnIndex: number} | null>>
   setIsResizingStructure: React.Dispatch<React.SetStateAction<boolean>>
   setStructureResizeDirection: React.Dispatch<React.SetStateAction<'left' | 'right' | 'top' | 'bottom' | 'corner-tl' | 'corner-tr' | 'corner-bl' | 'corner-br' | null>>
   setStructureResizeStartDimensions: React.Dispatch<React.SetStateAction<{ rows: number, cols: number } | null>>
@@ -128,6 +139,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   sheetHeaderDragStart,
   sheetHeaderResizeStartPos,
   sheetHeaderResizeStartSize,
+  isDraggingColumn,
+  draggedColumn,
+  columnDragStartX,
+  columnDropTarget,
   isResizingStructure,
   structureResizeDirection,
   structureResizeStartDimensions,
@@ -163,6 +178,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setSheetHeaderResizeIndex,
   setSheetHeaderResizeStartPos,
   setSheetHeaderResizeStartSize,
+  setIsDraggingColumn,
+  setDraggedColumn,
+  setColumnDragStartX,
+  setColumnDropTarget,
   setColumnWidths,
   setRowHeights,
   setIsDraggingStructure,
@@ -188,9 +207,22 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   // State for tracking hovered structure
   const [hoveredStructure, setHoveredStructure] = React.useState<Structure | null>(null)
   
+  // State for add button hover tracking
+  const [hoveredAddButton, setHoveredAddButton] = React.useState<{
+    type: 'column' | 'row'
+    position: 'left' | 'right' | 'bottom' | 'top'
+    structureId: string
+    insertIndex: number
+    x: number
+    y: number
+  } | null>(null)
+  
   // Cell editing state
   const [cellValues, setCellValues] = React.useState<Map<string, string>>(new Map())
   const [editingCells, setEditingCells] = React.useState<Set<string>>(new Set())
+  
+  // Flag to prevent double handling of column header clicks
+  const [columnHeaderHandledInMouseDown, setColumnHeaderHandledInMouseDown] = React.useState(false)
 
   // Cell rendering utilities
   const getCellKey = (row: number, col: number) => `${row}-${col}`
@@ -239,17 +271,21 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     
     if (structure && isHeaderCell(row, col, structure) && structure.type === 'table') {
       // Use green background to match table border color
-      return { ...baseStyle, backgroundColor: '#00A63E', opacity: 0.8 }
+      return { ...baseStyle, backgroundColor: 'rgba(0, 166, 62, 0.8)' }
     }
     
     // Add transparent background colors for structure types
     if (structure?.type === 'table') {
-      return { ...baseStyle, backgroundColor: '#00A63E', opacity: 0.1 } // Transparent light green
+      return { ...baseStyle, backgroundColor: 'rgba(0, 166, 62, 0.1)' } // Transparent light green
     }
     
     if (structure?.type === 'array') {
-      return { ...baseStyle, backgroundColor: '#2B7FFF', opacity: 0.1 } // Transparent light blue
+      return { ...baseStyle, backgroundColor: 'rgba(43, 127, 255, 0.1)' } // Transparent light blue
     }
+
+    if (structure?.type === 'cell') {
+      return { ...baseStyle, backgroundColor: '#f9fafb' } // Gray
+    } 
     
     return baseStyle
   }
@@ -322,10 +358,29 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }
 
+  // Selecting a structure should also clear selected cell, text editing, and range
+  const selectStructure = (structure: Structure) => {
+    setSelectedStructure(structure)
+    setSelectedCell(null)
+    setStartEditing(null)
+    setSelectedRange(null)
+    setEditingCells(new Set())
+  }
+
   // Sync cell values with cellData
+  // TODO: determine if this is necessary
   React.useEffect(() => {
-    setCellValues(new Map(cellData))
-  }, [cellData])
+    setCellValues(prev => {
+      const newMap = new Map(cellData)
+      // Keep any values that are currently being edited
+      for (const [key, value] of prev) {
+        if (editingCells.has(key) && !newMap.has(key)) {
+          newMap.set(key, value)
+        }
+      }
+      return newMap
+    })
+  }, [cellData, editingCells])
 
   // Begin editing when startEditing is set
   React.useEffect(() => {
@@ -357,7 +412,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return (
       <div 
         className={`w-full h-full relative ${getDisplay(isSelected)}`}
-        onMouseDown={(e) => handleMouseDown(row, col, e)}
         onMouseEnter={() => handleMouseEnter(row, col)}
         onMouseUp={handleMouseUp}
         onContextMenu={(e) => handleRightClick(row, col, e)}
@@ -369,6 +423,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           <input
             type="text"
             value={cellValue}
+            data-cell-key={cellKey}
             onChange={(e) => {
               setCellValues(prev => {
                 const newMap = new Map(prev)
@@ -425,7 +480,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           
           // Update selected structure if it's the same one
           if (selectedStructure && selectedStructure.id === structure.id) {
-            setSelectedStructure(updatedStructure)
+            selectStructure(updatedStructure)
           }
         }
         
@@ -494,10 +549,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       
       // Also select the structure if it wasn't already selected
       if (!selectedStructure || selectedStructure.id !== structure.id) {
-        setSelectedStructure(structure)
-        setSelectedCell(null)
-        setStartEditing(null)
-        setSelectedRange(null)
+        selectStructure(structure)
       }
       
       return
@@ -535,6 +587,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   }
 
   const handleColumnHeaderClick = (row: number, col: number) => {
+    // Check if this was already handled in mouse down
+    if (columnHeaderHandledInMouseDown) {
+      setColumnHeaderHandledInMouseDown(false)
+      return
+    }
+
     // Check if this is a table header cell
     const structure = getStructureAtPosition(row, col, structures)
     if (structure && structure.type === 'table') {
@@ -550,14 +608,46 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         // Second click on already selected column - start editing the cell
         setSelectedCell({ row, col })
         setStartEditing({ row, col })
-        // Keep both the column and table selected
       } else {
         // First click on column - select the column and table
         setSelectedColumn({ tableId: table.id, columnIndex })
-        setSelectedStructure(table)
+        selectStructure(table)
         setSelectedCell(null)
         setSelectedRange(null)
       }
+    }
+  }
+
+  const handleColumnHeaderMouseDown = (row: number, col: number, e: React.MouseEvent) => {
+    if (e.button !== 0) return // Only handle left-click
+
+    // Check if this is a table header cell
+    const structure = getStructureAtPosition(row, col, structures)
+    if (structure && structure.type === 'table') {
+      const table = structure as any
+      const columnIndex = col - table.startPosition.col
+      
+      // Always prevent default and prepare for potential drag
+      e.preventDefault()
+      setColumnHeaderHandledInMouseDown(true)
+      
+      // Check if this column is already selected
+      const isSameColumnSelected = selectedColumn &&
+        selectedColumn.tableId === table.id &&
+        selectedColumn.columnIndex === columnIndex
+      
+      if (!isSameColumnSelected) {
+        // First select the column
+        setSelectedColumn({ tableId: table.id, columnIndex })
+        selectStructure(table)
+        setSelectedCell(null)
+        setSelectedRange(null)
+      }
+      
+      // Prepare for drag
+      setDraggedColumn({ tableId: table.id, columnIndex })
+      setColumnDragStartX(e.clientX)
+      setColumnDropTarget(null)
     }
   }
 
@@ -592,47 +682,305 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }
 
-  const handleAddColumn = (tableRow: number, tableCol: number, insertAfterCol: number) => {
-    // Find the table structure at the given position
-    const structure = getStructureAtPosition(tableRow, tableCol, structures)
+  const handleAddTableColumn = (tableId: string, insertAfterCol: number, position: 'left' | 'right') => {
+    // Find the table structure by ID
+    const table = structures.get(tableId)
     
-    if (!structure || structure.type !== 'table') return
+    if (!table || table.type !== 'table') return
     
-    const table = structure as any
+    const tableStructure = table as Table
+    
+    // Update table dimensions
     const newDimensions = { 
-      rows: table.dimensions.rows, 
-      cols: table.dimensions.cols + 1 
+      rows: getDimensions(tableStructure).rows, 
+      cols: getDimensions(tableStructure).cols + 1 
+    }
+    
+    // Calculate new table positions based on insert position
+    let newStartPosition = { ...tableStructure.startPosition }
+    let newEndPosition = { ...tableStructure.endPosition }
+    
+    if (position === 'left') {
+      // Adding to the left: move start position left, keep end position
+      newStartPosition.col = tableStructure.startPosition.col - 1
+      newEndPosition.col = tableStructure.endPosition.col
+    } else {
+      // Adding to the right: keep start position, move end position right
+      newStartPosition.col = tableStructure.startPosition.col
+      newEndPosition.col = tableStructure.endPosition.col + 1
     }
     
     // Update table structure
     const updatedTable = {
-      ...table,
+      ...tableStructure,
       dimensions: newDimensions,
-      endPosition: {
-        row: table.endPosition.row,
-        col: table.endPosition.col + 1
-      }
+      startPosition: newStartPosition,
+      endPosition: newEndPosition
     }
+    
+    // Update arrays within the table
+    const updatedArrays = tableStructure.arrays.map((array: StructureArray, arrayIndex: number) => {
+      const newArray : StructureArray = {
+        ...array,
+        startPosition: { ...array.startPosition, col: newStartPosition.col },
+        endPosition: { ...array.endPosition, col: newEndPosition.col },
+        size: array.size + 1,
+        cells: []
+      }
+      
+      // Create new cells array based on position
+      if (position === 'left') {
+        // Add new cell at the beginning
+        newArray.cells = [
+          {
+            type: 'cell' as const,
+            id: `cell-${array.startPosition.row}-${newStartPosition.col}`,
+            startPosition: { row: array.startPosition.row, col: newStartPosition.col },
+            endPosition: { row: array.startPosition.row, col: newStartPosition.col },
+            value: ''
+          },
+          ...array.cells.map((cell: any) => ({
+            ...cell,
+            startPosition: { ...cell.startPosition, col: cell.startPosition.col },
+            endPosition: { ...cell.endPosition, col: cell.endPosition.col }
+          }))
+        ]
+      } else {
+        // Add new cell at the end
+        newArray.cells = [
+          ...array.cells.map((cell: any) => ({
+            ...cell,
+            startPosition: { ...cell.startPosition, col: cell.startPosition.col },
+            endPosition: { ...cell.endPosition, col: cell.endPosition.col }
+          })),
+          {
+            type: 'cell' as const,
+            id: `cell-${array.startPosition.row}-${newEndPosition.col}`,
+            startPosition: { row: array.startPosition.row, col: newEndPosition.col },
+            endPosition: { row: array.startPosition.row, col: newEndPosition.col },
+            value: ''
+          }
+        ]
+      }
+      
+      return newArray
+    })
+    
+    updatedTable.arrays = updatedArrays
     
     // Update the table structure
     setStructures(prev => {
       const newStructures = new Map(prev)
-      newStructures.set(table.id, updatedTable)
+      newStructures.set(tableStructure.id, updatedTable)
       return newStructures
     })
     
-    // Shift cell data for columns after the insertion point
+    // Update selected structure if it's the same table
+    if (selectedStructure && selectedStructure.id === tableStructure.id) {
+      selectStructure(updatedTable)
+    }
+  }
+
+  const handleAddArrayColumn = (arrayId: string, insertAfterCol: number, position: 'left' | 'right') => {
+    // Find the array structure by ID
+    const array = structures.get(arrayId)
+    
+    if (!array || array.type !== 'array') return
+    
+    const arrayStructure = array as StructureArray
+    
+    // Calculate new array positions based on insert position
+    let newStartPosition = { ...arrayStructure.startPosition }
+    let newEndPosition = { ...arrayStructure.endPosition }
+    
+    if (position === 'left') {
+      // Adding to the left: move start position left, keep end position
+      newStartPosition.col = arrayStructure.startPosition.col - 1
+      newEndPosition.col = arrayStructure.endPosition.col
+    } else {
+      // Adding to the right: keep start position, move end position right
+      newStartPosition.col = arrayStructure.startPosition.col
+      newEndPosition.col = arrayStructure.endPosition.col + 1
+    }
+    
+    // Update array structure
+    const updatedArray = {
+      ...arrayStructure,
+      size: arrayStructure.size + 1,
+      startPosition: newStartPosition,
+      endPosition: newEndPosition
+    }
+    
+    // Update cells within the array
+    const updatedCells = []
+    
+    // Calculate current dimensions from the array structure
+    const currentRows = arrayStructure.endPosition.row - arrayStructure.startPosition.row + 1
+    const currentCols = arrayStructure.endPosition.col - arrayStructure.startPosition.col + 1
+    
+    if (position === 'left') {
+      // Add new cells at the beginning of each row
+      for (let r = 0; r < currentRows; r++) {
+        const cellRow = newStartPosition.row + r
+        // Add new cell at the beginning
+        updatedCells.push({
+          type: 'cell' as const,
+          id: `cell-${cellRow}-${newStartPosition.col}`,
+          startPosition: { row: cellRow, col: newStartPosition.col },
+          endPosition: { row: cellRow, col: newStartPosition.col },
+          value: ''
+        })
+        // Add existing cells
+        for (let c = 0; c < currentCols; c++) {
+          const existingCellIndex = r * currentCols + c
+          if (existingCellIndex < arrayStructure.cells.length) {
+            updatedCells.push({
+              ...arrayStructure.cells[existingCellIndex],
+              startPosition: { ...arrayStructure.cells[existingCellIndex].startPosition },
+              endPosition: { ...arrayStructure.cells[existingCellIndex].endPosition }
+            })
+          }
+        }
+      }
+    } else {
+      // Add new cells at the end of each row
+      for (let r = 0; r < currentRows; r++) {
+        const cellRow = newStartPosition.row + r
+        // Add existing cells
+        for (let c = 0; c < currentCols; c++) {
+          const existingCellIndex = r * currentCols + c
+          if (existingCellIndex < arrayStructure.cells.length) {
+            updatedCells.push({
+              ...arrayStructure.cells[existingCellIndex],
+              startPosition: { ...arrayStructure.cells[existingCellIndex].startPosition },
+              endPosition: { ...arrayStructure.cells[existingCellIndex].endPosition }
+            })
+          }
+        }
+        // Add new cell at the end
+        updatedCells.push({
+          type: 'cell' as const,
+          id: `cell-${cellRow}-${newEndPosition.col}`,
+          startPosition: { row: cellRow, col: newEndPosition.col },
+          endPosition: { row: cellRow, col: newEndPosition.col },
+          value: ''
+        })
+      }
+    }
+    
+    updatedArray.cells = updatedCells
+    
+    // Update the array structure
+    setStructures(prev => {
+      const newStructures = new Map(prev)
+      newStructures.set(arrayStructure.id, updatedArray)
+      return newStructures
+    })
+    
+    // Shift cell data based on position
     setCellData(prev => {
       const newData = new Map(prev)
       
-      // Move data from right to left to avoid overwriting
-      for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
-        for (let c = table.endPosition.col; c > insertAfterCol; c--) {
+      if (position === 'left') {
+        // Shift all existing array data one column to the right
+        for (let r = arrayStructure.startPosition.row; r <= arrayStructure.endPosition.row; r++) {
+          for (let c = arrayStructure.endPosition.col; c >= arrayStructure.startPosition.col; c--) {
+            const oldKey = `${r}-${c}`
+            const newKey = `${r}-${c + 1}`
+            const value = newData.get(oldKey)
+            if (value) {
+              newData.set(newKey, value)
+            }
+            newData.delete(oldKey)
+          }
+        }
+      } else {
+        // For right insertion, no need to shift existing data
+        // New column will be empty by default
+      }
+      
+      return newData
+    })
+    
+    // Update selected structure if it's the same array
+    if (selectedStructure && selectedStructure.id === arrayStructure.id) {
+      selectStructure(updatedArray)
+    }
+  }
+
+  const handleAddArrayRow = (arrayId: string, insertAfterRow: number, position: 'bottom') => {
+    // Find the array structure by ID
+    const array = structures.get(arrayId)
+    
+    if (!array || array.type !== 'array') return
+    
+    const arrayStructure = array as StructureArray
+    const insertRow = insertAfterRow + 1
+    
+    // Calculate current dimensions from the array structure
+    const currentRows = arrayStructure.endPosition.row - arrayStructure.startPosition.row + 1
+    const currentCols = arrayStructure.endPosition.col - arrayStructure.startPosition.col + 1
+    
+    // Update array structure
+    const updatedArray = {
+      ...arrayStructure,
+      endPosition: {
+        row: arrayStructure.endPosition.row + 1,
+        col: arrayStructure.endPosition.col
+      }
+    }
+    
+    // Create new cells for the inserted row
+    const newRowCells = []
+    for (let c = 0; c < currentCols; c++) {
+      const cellCol = arrayStructure.startPosition.col + c
+      newRowCells.push({
+        type: 'cell' as const,
+        id: `cell-${insertRow}-${cellCol}`,
+        startPosition: { row: insertRow, col: cellCol },
+        endPosition: { row: insertRow, col: cellCol },
+        value: ''
+      })
+    }
+    
+    // Update cells within the array
+    const insertIndex = insertRow - arrayStructure.startPosition.row
+    const rowsBeforeInsert = insertIndex
+    const cellsBeforeInsert = rowsBeforeInsert * currentCols
+    
+    const updatedCells = [
+      ...arrayStructure.cells.slice(0, cellsBeforeInsert),
+      ...newRowCells,
+      ...arrayStructure.cells.slice(cellsBeforeInsert).map((cell: any) => ({
+        ...cell,
+        startPosition: { ...cell.startPosition, row: cell.startPosition.row + 1 },
+        endPosition: { ...cell.endPosition, row: cell.endPosition.row + 1 }
+      }))
+    ]
+    
+    updatedArray.cells = updatedCells
+    
+    // Update the array structure
+    setStructures(prev => {
+      const newStructures = new Map(prev)
+      newStructures.set(arrayStructure.id, updatedArray)
+      return newStructures
+    })
+    
+    // Shift cell data for rows after the insertion point
+    setCellData(prev => {
+      const newData = new Map(prev)
+      
+      // Move data from bottom to top to avoid overwriting
+      for (let r = arrayStructure.endPosition.row; r >= insertRow; r--) {
+        for (let c = arrayStructure.startPosition.col; c <= arrayStructure.endPosition.col; c++) {
           const oldKey = `${r}-${c}`
-          const newKey = `${r}-${c + 1}`
+          const newKey = `${r + 1}-${c}`
           const value = newData.get(oldKey)
           if (value) {
             newData.set(newKey, value)
+          }
+          if (r >= insertRow) {
             newData.delete(oldKey)
           }
         }
@@ -641,9 +989,143 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       return newData
     })
     
-    // Hide the add column button
-    setShowAddColumnButton(false)
-    setHoveredHeaderCell(null)
+    // Update selected structure if it's the same array
+    if (selectedStructure && selectedStructure.id === arrayStructure.id) {
+      selectStructure(updatedArray)
+    }
+  }
+
+  const handleAddRow = (structureId: string, insertAfterRow: number, position: 'top' | 'bottom') => {
+    // Find the structure by ID
+    const structure = structures.get(structureId)
+    
+    if (!structure) return
+    
+    if (structure.type === 'table') {
+      return handleAddTableRow(structureId, insertAfterRow, position)
+    } else if (structure.type === 'array') {
+      return handleAddArrayRow(structureId, insertAfterRow, 'bottom')
+    }
+  }
+
+  const handleAddColumn = (structureId: string, insertAfterCol: number, position: 'left' | 'right') => {
+    // Find the structure by ID
+    const structure = structures.get(structureId)
+    
+    if (!structure) return
+    
+    if (structure.type === 'table') {
+      return handleAddTableColumn(structureId, insertAfterCol, position)
+    } else if (structure.type === 'array') {
+      return handleAddArrayColumn(structureId, insertAfterCol, position)
+    }
+  }
+
+  const handleAddTableRow = (tableId: string, insertAfterRow: number, position: 'top' | 'bottom') => {
+    // Find the table structure by ID
+    const table = structures.get(tableId)
+    
+    if (!table || table.type !== 'table') return
+    
+    const tableStructure = table as any
+    const insertRow = position === 'top' ? insertAfterRow : insertAfterRow + 1
+    
+    // Update table dimensions
+    const newDimensions = { 
+      rows: getDimensions(tableStructure).rows + 1, 
+      cols: getDimensions(tableStructure).cols
+    }
+    
+    // Update table structure
+    const updatedTable = {
+      ...tableStructure,
+      dimensions: newDimensions,
+      endPosition: {
+        row: tableStructure.endPosition.row + 1,
+        col: tableStructure.endPosition.col
+      }
+    }
+    
+    // Create new array for the inserted row
+    const newRowCells = []
+    for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
+      const cellCol = tableStructure.startPosition.col + c
+      newRowCells.push({
+        type: 'cell' as const,
+        id: `cell-${insertRow}-${cellCol}`,
+        startPosition: { row: insertRow, col: cellCol },
+        endPosition: { row: insertRow, col: cellCol },
+        value: ''
+      })
+    }
+    
+    const newArray = {
+      type: 'array' as const,
+      id: `array-${insertRow}-${tableStructure.startPosition.col}`,
+      startPosition: { row: insertRow, col: tableStructure.startPosition.col },
+      endPosition: { row: insertRow, col: tableStructure.endPosition.col },
+      cells: newRowCells,
+      dimensions: { rows: 1, cols: getDimensions(tableStructure).cols }
+    }
+    
+    // Update arrays within the table
+    const insertIndex = insertRow - tableStructure.startPosition.row
+    const updatedArrays = [
+      ...tableStructure.arrays.slice(0, insertIndex),
+      newArray,
+      ...tableStructure.arrays.slice(insertIndex).map((array: any) => ({
+        ...array,
+        startPosition: {
+          ...array.startPosition,
+          row: array.startPosition.row + 1
+        },
+        endPosition: {
+          ...array.endPosition,
+          row: array.endPosition.row + 1
+        },
+        cells: array.cells.map((cell: any) => ({
+          ...cell,
+          startPosition: { ...cell.startPosition, row: cell.startPosition.row + 1 },
+          endPosition: { ...cell.endPosition, row: cell.endPosition.row + 1 }
+        }))
+      }))
+    ]
+    
+    updatedTable.arrays = updatedArrays
+    
+    // Update the table structure
+    setStructures(prev => {
+      const newStructures = new Map(prev)
+      newStructures.set(tableStructure.id, updatedTable)
+      return newStructures
+    })
+    
+    // Shift cell data for rows after the insertion point
+    setCellData(prev => {
+      const newData = new Map(prev)
+      
+      // Move data from bottom to top to avoid overwriting
+      for (let r = tableStructure.endPosition.row; r >= insertRow; r--) {
+        for (let c = tableStructure.startPosition.col; c <= tableStructure.endPosition.col; c++) {
+          const oldKey = `${r}-${c}`
+          const newKey = `${r + 1}-${c}`
+          const value = newData.get(oldKey)
+          if (value) {
+            newData.set(newKey, value)
+          }
+          if (r >= insertRow) {
+            newData.delete(oldKey)
+          }
+        }
+      }
+      
+      return newData
+    })
+    
+    // Update selected structure if it's the same table
+    if (selectedStructure && selectedStructure.id === tableStructure.id) {
+      selectStructure(updatedTable)
+    }
   }
 
   const handleResizeMouseDown = (type: 'column' | 'row', index: number, e: React.MouseEvent) => {
@@ -679,9 +1161,70 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     
     // Store the current dimensions
     if ('dimensions' in selectedStructure) {
-      setStructureResizeStartDimensions(selectedStructure.dimensions)
+      setStructureResizeStartDimensions(getDimensions(selectedStructure))
     }
   }
+
+  // Global keydown event handler for column header editing
+  React.useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Check if a column is selected and a printable character is typed
+      if (selectedColumn && !isDraggingColumn && !isResizingSheetHeader && !isResizingStructure) {
+        // Check if the key is a printable character (not arrow keys, function keys, etc.)
+        const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
+        
+        if (isPrintableChar) {
+          // Find the table and get the header cell position
+          const table = structures.get(selectedColumn.tableId)
+          if (table && table.type === 'table') {
+            const tableStructure = table as any
+            const headerRow = tableStructure.startPosition.row
+            const headerCol = tableStructure.startPosition.col + selectedColumn.columnIndex
+            
+            // Start editing the header cell with the typed character
+            const cellKey = getCellKey(headerRow, headerCol)
+            
+            // Select the header cell first
+            setSelectedCell({ row: headerRow, col: headerCol })
+            
+            // Start editing the cell
+            setEditingCells(prev => {
+              const newSet = new Set(prev)
+              newSet.add(cellKey)
+              return newSet
+            })
+            
+            // Use setTimeout to ensure the input field is rendered and then set it up
+            setTimeout(() => {
+              const inputElement = document.querySelector(`input[data-cell-key="${cellKey}"]`) as HTMLInputElement
+              if (inputElement) {
+                // Clear the input and set to the typed character
+                inputElement.value = e.key
+                inputElement.focus()
+                inputElement.setSelectionRange(1, 1) // Position cursor after the typed character
+                
+                // Also update the React state to match
+                setCellValues(prev => {
+                  const newMap = new Map(prev)
+                  newMap.set(cellKey, e.key)
+                  return newMap
+                })
+              }
+            }, 10) // Slightly longer timeout to ensure rendering is complete
+            
+            // Prevent the default action
+            e.preventDefault()
+          }
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    
+    return () => {
+      document.removeEventListener('keydown', handleGlobalKeyDown)
+    }
+  }, [selectedColumn, isDraggingColumn, isResizingSheetHeader, isResizingStructure, structures, setCellValues, setEditingCells, setSelectedCell])
 
   // Global mouse event handlers for resizing and dragging
   React.useEffect(() => {
@@ -689,7 +1232,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       try {
         // Handle structure drag drop only if we have all required data and no conflict dialog
         if (isDraggingStructure && draggedStructure && dropTarget && !showConflictDialog) {
-          const structureCells = getCellsInStructure(draggedStructure, cellData)
+          const structureCells = getCellsInStructure(draggedStructure, structures)
           const conflicts = detectConflicts(dropTarget, structureCells, cellData, draggedStructure)
           
           if (conflicts.length > 0) {
@@ -716,7 +1259,91 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             })
             
             // Update selected structure
-            setSelectedStructure(updatedStructure)
+            selectStructure(updatedStructure)
+          }
+        }
+
+        // Handle column drag drop
+        if (isDraggingColumn && draggedColumn && columnDropTarget) {
+          // Perform column reordering
+          const table = structures.get(draggedColumn.tableId)
+          if (table && table.type === 'table') {
+            const tableStructure = table as any
+            const sourceColumnIndex = draggedColumn.columnIndex
+            const targetColumnIndex = columnDropTarget.targetColumnIndex
+            
+            if (sourceColumnIndex !== targetColumnIndex) {
+              // Reorder columns in the table structure
+              const updatedArrays = tableStructure.arrays.map((array: any) => {
+                const newCells = [...array.cells]
+                
+                // Move the cell from source to target position
+                const sourceCell = newCells[sourceColumnIndex]
+                newCells.splice(sourceColumnIndex, 1)
+                newCells.splice(targetColumnIndex, 0, sourceCell)
+                
+                return {
+                  ...array,
+                  cells: newCells
+                }
+              })
+              
+              const updatedTable = {
+                ...tableStructure,
+                arrays: updatedArrays
+              }
+              
+              // Update the table structure
+              setStructures(prev => {
+                const newStructures = new Map(prev)
+                newStructures.set(tableStructure.id, updatedTable)
+                return newStructures
+              })
+              
+              // Reorder cell data
+              setCellData(prev => {
+                const newData = new Map(prev)
+                
+                // For each row in the table, move the cell data
+                for (let r = tableStructure.startPosition.row; r <= tableStructure.endPosition.row; r++) {
+                  const rowData = []
+                  
+                  // Collect all cell values for this row
+                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
+                    const cellCol = tableStructure.startPosition.col + c
+                    const cellKey = `${r}-${cellCol}`
+                    rowData.push(newData.get(cellKey) || '')
+                  }
+                  
+                  // Reorder the row data
+                  const sourceValue = rowData[sourceColumnIndex]
+                  rowData.splice(sourceColumnIndex, 1)
+                  rowData.splice(targetColumnIndex, 0, sourceValue)
+                  
+                  // Write back the reordered data
+                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
+                    const cellCol = tableStructure.startPosition.col + c
+                    const cellKey = `${r}-${cellCol}`
+                    if (rowData[c]) {
+                      newData.set(cellKey, rowData[c])
+                    } else {
+                      newData.delete(cellKey)
+                    }
+                  }
+                }
+                
+                return newData
+              })
+              
+              // Update selected column to follow the moved column
+              setSelectedColumn({ 
+                tableId: draggedColumn.tableId, 
+                columnIndex: targetColumnIndex 
+              })
+              
+              // Update selected structure
+              selectStructure(updatedTable)
+            }
           }
         }
       } finally {
@@ -733,6 +1360,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         setIsResizingStructure(false)
         setStructureResizeDirection(null)
         setStructureResizeStartDimensions(null)
+        setIsDraggingColumn(false)
+        setDraggedColumn(null)
+        setColumnDragStartX(0)
+        setColumnDropTarget(null)
       }
     }
 
@@ -796,95 +1427,259 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         }
       }
 
+      // Handle column drag detection and real-time reordering
+      if (draggedColumn && containerRef.current) {
+        const deltaX = e.clientX - columnDragStartX
+        const dragThreshold = 5 // Pixels before starting drag
+        
+        // Check if we should start dragging
+        if (!isDraggingColumn && Math.abs(deltaX) > dragThreshold) {
+          setIsDraggingColumn(true)
+        }
+        
+        // Handle real-time reordering once dragging has started
+        if (isDraggingColumn) {
+          // Find the table structure
+          const table = structures.get(draggedColumn.tableId)
+          if (table && table.type === 'table') {
+            const tableStructure = table as any
+            const currentColumnIndex = draggedColumn.columnIndex
+            
+            // Calculate target column based on mouse position relative to table
+            const containerRect = containerRef.current.getBoundingClientRect()
+            const relativeX = e.clientX - containerRect.left + scrollLeft
+            
+            // Find which column we're over within the table
+            let targetColumnIndex = currentColumnIndex
+            let currentX = getColumnPosition(tableStructure.startPosition.col, columnWidths)
+            
+            for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
+              const colWidth = getColumnWidth(tableStructure.startPosition.col + c, columnWidths)
+              if (relativeX >= currentX && relativeX < currentX + colWidth) {
+                targetColumnIndex = c
+                break
+              }
+              currentX += colWidth
+            }
+            
+            // Perform real-time column reordering if target changed
+            if (targetColumnIndex !== currentColumnIndex) {
+              // Reorder columns in the table structure in real-time
+              const updatedArrays = tableStructure.arrays.map((array: any) => {
+                const newCells = [...array.cells]
+                
+                // Move the cell from source to target position
+                const sourceCell = newCells[currentColumnIndex]
+                newCells.splice(currentColumnIndex, 1)
+                newCells.splice(targetColumnIndex, 0, sourceCell)
+                
+                return {
+                  ...array,
+                  cells: newCells
+                }
+              })
+              
+              const updatedTable = {
+                ...tableStructure,
+                arrays: updatedArrays
+              }
+              
+              // Update the table structure in real-time
+              setStructures(prev => {
+                const newStructures = new Map(prev)
+                newStructures.set(tableStructure.id, updatedTable)
+                return newStructures
+              })
+              
+              // Reorder cell data in real-time
+              setCellData(prev => {
+                const newData = new Map(prev)
+                
+                // For each row in the table, move the cell data
+                for (let r = tableStructure.startPosition.row; r <= tableStructure.endPosition.row; r++) {
+                  const rowData = []
+                  
+                  // Collect all cell values for this row
+                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
+                    const cellCol = tableStructure.startPosition.col + c
+                    const cellKey = `${r}-${cellCol}`
+                    rowData.push(newData.get(cellKey) || '')
+                  }
+                  
+                  // Reorder the row data
+                  const sourceValue = rowData[currentColumnIndex]
+                  rowData.splice(currentColumnIndex, 1)
+                  rowData.splice(targetColumnIndex, 0, sourceValue)
+                  
+                  // Write back the reordered data
+                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
+                    const cellCol = tableStructure.startPosition.col + c
+                    const cellKey = `${r}-${cellCol}`
+                    if (rowData[c]) {
+                      newData.set(cellKey, rowData[c])
+                    } else {
+                      newData.delete(cellKey)
+                    }
+                  }
+                }
+                
+                return newData
+              })
+              
+              // Update the dragged column index to track the new position
+              setDraggedColumn({ 
+                tableId: draggedColumn.tableId, 
+                columnIndex: targetColumnIndex 
+              })
+              
+              // Update selected column to follow the moved column
+              setSelectedColumn({ 
+                tableId: draggedColumn.tableId, 
+                columnIndex: targetColumnIndex 
+              })
+              
+              // Update selected structure
+              selectStructure(updatedTable)
+            }
+          }
+        }
+      }
+
       // Handle structure resizing
-      if (isResizingStructure && structureResizeDirection && structureResizeStartDimensions && selectedStructure) {
-        if (selectedStructure.type === 'cell' || selectedStructure.type === 'column') return
+      if (isResizingStructure && structureResizeDirection && selectedStructure && containerRef.current) {
+        if (selectedStructure.type !== 'table' && selectedStructure.type !== 'array') return
 
-        // Calculate separate X and Y deltas for corner resizing
-        const deltaX = e.clientX - structureResizeStartX
-        const deltaY = e.clientY - structureResizeStartY
+        const containerRect = containerRef.current.getBoundingClientRect()
+        const relativeX = e.clientX - containerRect.left + scrollLeft
+        const relativeY = e.clientY - containerRect.top + scrollTop
         
-        // Calculate new dimensions based on resize direction
-        let newRows = structureResizeStartDimensions.rows
-        let newCols = structureResizeStartDimensions.cols
+        // Convert current mouse position to grid coordinates
+        let targetCol = 0
+        let targetRow = 0
         
-        if (structureResizeDirection === 'left' || structureResizeDirection === 'right' || structureResizeDirection.startsWith('corner-')) {
-          // Calculate how many columns to add/remove based on pixel delta
-          const avgColumnWidth = 82 // Default column width. TODO use actual column widths
-          const columnDelta = Math.round(deltaX / avgColumnWidth)
-          
-          if (structureResizeDirection === 'left' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-bl') {
-            // For left edge/corners, dragging left (negative delta) means expanding (adding columns)
-            // We need to invert the delta so negative becomes positive expansion
-            newCols = Math.max(1, structureResizeStartDimensions.cols - columnDelta)
-          } else {
-            // For right edge/corners, positive delta means expanding
-            newCols = Math.max(1, structureResizeStartDimensions.cols + columnDelta)
-          }
+        // Calculate target column based on mouse position
+        let currentX = getHeaderWidth()
+        while (targetCol < 26 && currentX + getColumnWidth(targetCol, columnWidths) < relativeX) {
+          currentX += getColumnWidth(targetCol, columnWidths)
+          targetCol++
         }
         
-        if (structureResizeDirection === 'top' || structureResizeDirection === 'bottom' || structureResizeDirection.startsWith('corner-')) {
-          // Calculate how many rows to add/remove based on pixel delta
-          const avgRowHeight = 32 // Default row height
-          const rowDelta = Math.round(deltaY / avgRowHeight)
-          
-          if (structureResizeDirection === 'top' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-tr') {
-            // For top edge/corners, dragging up (negative delta) means expanding (adding rows)
-            // We need to invert the delta so negative becomes positive expansion
-            newRows = Math.max(1, structureResizeStartDimensions.rows - rowDelta)
-          } else {
-            // For bottom edge/corners, positive delta means expanding
-            newRows = Math.max(1, structureResizeStartDimensions.rows + rowDelta)
-          }
+        // Calculate target row based on mouse position  
+        let currentY = getHeaderHeight()
+        while (targetRow < MAX_ROWS && currentY + getRowHeight(targetRow, rowHeights) < relativeY) {
+          currentY += getRowHeight(targetRow, rowHeights)
+          targetRow++
         }
+        
+        // Get current dimensions
+        const { rows: currentRows, cols: currentCols } = getDimensions(selectedStructure)
+        const originalStartPosition = selectedStructure.startPosition
+        const originalEndPosition = selectedStructure.endPosition
+        
+        // Calculate new boundaries based on resize direction
+        let newStartPosition = { ...originalStartPosition }
+        let newEndPosition = { ...originalEndPosition }
+        
+        // Handle horizontal resizing based on target column
+        if (structureResizeDirection === 'left' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-bl') {
+          // Resize from left edge - adjust start position
+          newStartPosition.col = Math.max(0, Math.min(targetCol, originalEndPosition.col))
+        } else if (structureResizeDirection === 'right' || structureResizeDirection === 'corner-tr' || structureResizeDirection === 'corner-br') {
+          // Resize from right edge - adjust end position
+          newEndPosition.col = Math.max(originalStartPosition.col, Math.min(targetCol, 25))
+        }
+        
+        // Handle vertical resizing based on target row
+        if (structureResizeDirection === 'top' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-tr') {
+          // Resize from top edge - adjust start position
+          newStartPosition.row = Math.max(0, Math.min(targetRow, originalEndPosition.row))
+        } else if (structureResizeDirection === 'bottom' || structureResizeDirection === 'corner-bl' || structureResizeDirection === 'corner-br') {
+          // Resize from bottom edge - adjust end position
+          newEndPosition.row = Math.max(originalStartPosition.row, Math.min(targetRow, MAX_ROWS - 1))
+        }
+        
+        // Calculate new dimensions
+        const newRows = newEndPosition.row - newStartPosition.row + 1
+        const newCols = newEndPosition.col - newStartPosition.col + 1
+        
+        // Only update if dimensions actually changed and are valid
+        if ((newRows !== currentRows || newCols !== currentCols) && newRows >= 1 && newCols >= 1) {
+          // For arrays, ensure we maintain direction constraints
+          if (selectedStructure.type === 'array') {
+            const arrayStructure = selectedStructure as StructureArray
+            if (arrayStructure.direction === 'horizontal' && newRows !== 1) {
+              // Horizontal arrays must stay at 1 row
+              if (structureResizeDirection === 'top' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-tr') {
+                newStartPosition.row = originalEndPosition.row
+              } else {
+                newEndPosition.row = originalStartPosition.row
+              }
+            } else if (arrayStructure.direction === 'vertical' && newCols !== 1) {
+              // Vertical arrays must stay at 1 column
+              if (structureResizeDirection === 'left' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-bl') {
+                newStartPosition.col = originalEndPosition.col
+              } else {
+                newEndPosition.col = originalStartPosition.col
+              }
+            }
+            
+            // Recalculate final dimensions after constraints
+            const finalRows = newEndPosition.row - newStartPosition.row + 1
+            const finalCols = newEndPosition.col - newStartPosition.col + 1
+            
+            if (finalRows !== currentRows || finalCols !== currentCols) {
+              // Create updated array structure
+              const newCells = []
+              for (let r = 0; r < finalRows; r++) {
+                for (let c = 0; c < finalCols; c++) {
+                  const cellRow = newStartPosition.row + r
+                  const cellCol = newStartPosition.col + c
+                  newCells.push({
+                    type: 'cell' as const,
+                    id: `cell-${cellRow}-${cellCol}`,
+                    startPosition: { row: cellRow, col: cellCol },
+                    endPosition: { row: cellRow, col: cellCol },
+                    value: cellData.get(`${cellRow}-${cellCol}`) || ''
+                  })
+                }
+              }
+              
+              const updatedStructure = {
+                ...arrayStructure,
+                startPosition: newStartPosition,
+                endPosition: newEndPosition,
+                cells: newCells,
+                size: newCells.length
+              } as StructureArray
+              
+              // Update structures map
+              setStructures(prev => {
+                const newStructures = new Map(prev)
+                newStructures.set(selectedStructure.id, updatedStructure)
+                return newStructures
+              })
+              
+              // Update selected structure
+              selectStructure(updatedStructure)
+            }
+          } else if (selectedStructure.type === 'table') {
+            // Handle table resizing
+            const finalRows = newEndPosition.row - newStartPosition.row + 1
+            const finalCols = newEndPosition.col - newStartPosition.col + 1
+            
+            // Create updated table structure
+            const updatedStructure = {
+              ...selectedStructure,
+              startPosition: newStartPosition,
+              endPosition: newEndPosition,
+              dimensions: { rows: finalRows, cols: finalCols }
+            } as Table
 
-        // Only update if dimensions actually changed
-        if (newRows !== selectedStructure.dimensions.rows || newCols !== selectedStructure.dimensions.cols) {
-          const originalStartPosition = selectedStructure.startPosition
-          const originalEndPosition = selectedStructure.endPosition
-          
-          // Calculate new start and end positions based on resize direction
-          let newStartPosition = { ...originalStartPosition }
-          let newEndPosition = { ...originalEndPosition }
-          
-          // Handle horizontal resizing
-          if (structureResizeDirection === 'left' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-bl') {
-            // Expanding left: move start position left, keep end position
-            const colDiff = newCols - selectedStructure.dimensions.cols
-            newStartPosition.col = originalStartPosition.col - colDiff
-            newEndPosition.col = originalEndPosition.col
-          } else if (structureResizeDirection === 'right' || structureResizeDirection === 'corner-tr' || structureResizeDirection === 'corner-br') {
-            // Expanding right: keep start position, move end position right
-            newStartPosition.col = originalStartPosition.col
-            newEndPosition.col = originalStartPosition.col + newCols - 1
-          }
-          
-          // Handle vertical resizing
-          if (structureResizeDirection === 'top' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-tr') {
-            // Expanding top: move start position up, keep end position
-            const rowDiff = newRows - selectedStructure.dimensions.rows
-            newStartPosition.row = originalStartPosition.row - rowDiff
-            newEndPosition.row = originalEndPosition.row
-          } else if (structureResizeDirection === 'bottom' || structureResizeDirection === 'corner-bl' || structureResizeDirection === 'corner-br') {
-            // Expanding bottom: keep start position, move end position down
-            newStartPosition.row = originalStartPosition.row
-            newEndPosition.row = originalStartPosition.row + newRows - 1
-          }
-
-          // Create updated structure
-          const updatedStructure = {
-            ...selectedStructure,
-            startPosition: newStartPosition,
-            endPosition: newEndPosition,
-            dimensions: { rows: newRows, cols: newCols }
-          }
-
-          // Update arrays for tables or cells for arrays
-          if (selectedStructure.type === 'table') {
+            // Update arrays for tables
             const arrays = []
-            for (let r = 0; r < newRows; r++) {
+            for (let r = 0; r < finalRows; r++) {
               const rowCells = []
-              for (let c = 0; c < newCols; c++) {
+              for (let c = 0; c < finalCols; c++) {
                 const cellRow = newStartPosition.row + r
                 const cellCol = newStartPosition.col + c
                 rowCells.push({
@@ -900,39 +1695,24 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 type: 'array' as const,
                 id: `array-${newStartPosition.row + r}-${newStartPosition.col}`,
                 startPosition: { row: newStartPosition.row + r, col: newStartPosition.col },
-                endPosition: { row: newStartPosition.row + r, col: newStartPosition.col + newCols - 1 },
+                endPosition: { row: newStartPosition.row + r, col: newStartPosition.col + finalCols - 1 },
                 cells: rowCells,
-                dimensions: { rows: 1, cols: newCols }
+                direction: 'horizontal' as const,
+                size: finalCols
               })
             }
             ;(updatedStructure as any).arrays = arrays
-          } else if (selectedStructure.type === 'array') {
-            const cells = []
-            for (let r = 0; r < newRows; r++) {
-              for (let c = 0; c < newCols; c++) {
-                const cellRow = newStartPosition.row + r
-                const cellCol = newStartPosition.col + c
-                cells.push({
-                  type: 'cell' as const,
-                  id: `cell-${cellRow}-${cellCol}`,
-                  startPosition: { row: cellRow, col: cellCol },
-                  endPosition: { row: cellRow, col: cellCol },
-                  value: cellData.get(`${cellRow}-${cellCol}`) || ''
-                })
-              }
-            }
-            ;(updatedStructure as any).cells = cells
+              
+            // Update structures map
+            setStructures(prev => {
+              const newStructures = new Map(prev)
+              newStructures.set(selectedStructure.id, updatedStructure)
+              return newStructures
+            })
+            
+            // Update selected structure
+            selectStructure(updatedStructure)
           }
-
-          // Update structures map
-          setStructures(prev => {
-            const newStructures = new Map(prev)
-            newStructures.set(selectedStructure.id, updatedStructure)
-            return newStructures
-          })
-
-          // Update selected structure
-          setSelectedStructure(updatedStructure)
         }
       }
     }
@@ -962,6 +1742,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     dragOffset,
     dropTarget,
     showConflictDialog,
+    isDraggingColumn,
+    draggedColumn,
+    columnDragStartX,
+    columnDropTarget,
+    structures,
     scrollLeft,
     scrollTop,
     columnWidths,
@@ -979,12 +1764,17 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setRowHeights,
     setStructures,
     setSelectedStructure,
+    setSelectedColumn,
     setIsDraggingStructure,
     setDraggedStructure,
     setDragOffset,
     setDropTarget,
     setShowConflictDialog,
     setConflictDialogData,
+    setIsDraggingColumn,
+    setDraggedColumn,
+    setColumnDragStartX,
+    setColumnDropTarget,
     setCellData
   ])
 
@@ -1064,174 +1854,460 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         // Check if this structure is selected
         const isSelected = selectedStructure && selectedStructure.id === structure.id
 
-        const borderColor = structure.type === 'cell' ? 'border-black' :
+        // Use subtle gray borders that integrate with the grid
+        const borderColor = structure.type === 'cell' ? 'border-gray-500' :
                            structure.type === 'array' ? 'border-blue-500' : 'border-green-600'
+        const borderWidth = isSelected ? 'border-3' : structure.type === 'cell' ? 'border' : 'border-2'
 
         overlays.push(
           <div
             key={`overlay-${key}`}
-            className={`absolute pointer-events-none ${isSelected ? `border-4 ${borderColor}` : `border-2 ${borderColor}`}`}
+            className={`absolute ${borderWidth} ${borderColor}`}
             style={{
               left: overlayLeft,
               top: overlayTop,
               width: overlayWidth,
               height: overlayHeight,
-              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 1 : Z_INDEX.STRUCTURE_OVERLAY
+              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 1 : Z_INDEX.STRUCTURE_OVERLAY,
+              pointerEvents: 'none' // Don't intercept clicks - let them pass through to cells
             }}
             title={structure.name ? `${structure.type}: ${structure.name}` : structure.type}
+            onMouseEnter={() => {
+              // Set hovered structure when hovering over the entire structure overlay
+              setHoveredStructure(structure)
+            }}
+            onMouseLeave={() => {
+              // Clear hovered structure when leaving the structure overlay
+              setHoveredStructure(null)
+            }}
           />
         )
 
-        // Remove the separate hover detector since we'll handle hover at the cell level
+        // Add clickable border areas for structure selection and dragging
+        const borderWidth_px = isSelected ? 3 : (structure.type === 'cell' ? 1 : 2)
+        
+        // Top border
+        overlays.push(
+          <div
+            key={`border-top-${key}`}
+            className="absolute cursor-move"
+            style={{
+              left: overlayLeft,
+              top: overlayTop,
+              width: overlayWidth,
+              height: borderWidth_px,
+              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 2 : Z_INDEX.STRUCTURE_OVERLAY + 1,
+              pointerEvents: 'auto'
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedColumn(null)
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              setSelectedColumn(null)
+              setIsDraggingStructure(true)
+              setDraggedStructure(structure)
+              setDragOffset({ row: 0, col: 0 })
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+          />
+        )
+        
+        // Bottom border
+        overlays.push(
+          <div
+            key={`border-bottom-${key}`}
+            className="absolute cursor-move"
+            style={{
+              left: overlayLeft,
+              top: overlayTop + overlayHeight - borderWidth_px,
+              width: overlayWidth,
+              height: borderWidth_px,
+              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 2 : Z_INDEX.STRUCTURE_OVERLAY + 1,
+              pointerEvents: 'auto'
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedColumn(null)
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              setSelectedColumn(null)
+              setIsDraggingStructure(true)
+              setDraggedStructure(structure)
+              setDragOffset({ row: endPosition.row - startPosition.row, col: 0 })
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+          />
+        )
+        
+        // Left border
+        overlays.push(
+          <div
+            key={`border-left-${key}`}
+            className="absolute cursor-move"
+            style={{
+              left: overlayLeft,
+              top: overlayTop + borderWidth_px,
+              width: borderWidth_px,
+              height: overlayHeight - 2 * borderWidth_px,
+              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 2 : Z_INDEX.STRUCTURE_OVERLAY + 1,
+              pointerEvents: 'auto'
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedColumn(null)
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              setSelectedColumn(null)
+              setIsDraggingStructure(true)
+              setDraggedStructure(structure)
+              setDragOffset({ row: 0, col: 0 })
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+          />
+        )
+        
+        // Right border
+        overlays.push(
+          <div
+            key={`border-right-${key}`}
+            className="absolute cursor-move"
+            style={{
+              left: overlayLeft + overlayWidth - borderWidth_px,
+              top: overlayTop + borderWidth_px,
+              width: borderWidth_px,
+              height: overlayHeight - 2 * borderWidth_px,
+              zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 2 : Z_INDEX.STRUCTURE_OVERLAY + 1,
+              pointerEvents: 'auto'
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedColumn(null)
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return
+              e.preventDefault()
+              e.stopPropagation()
+              setSelectedColumn(null)
+              setIsDraggingStructure(true)
+              setDraggedStructure(structure)
+              setDragOffset({ row: 0, col: endPosition.col - startPosition.col })
+              if (!selectedStructure || selectedStructure.id !== structure.id) {
+                selectStructure(structure)
+                setSelectedCell(null)
+                setStartEditing(null)
+                setSelectedRange(null)
+              }
+            }}
+          />
+        )
 
         // Add invisible resize areas for selected structures (arrays and tables only)
         if (isSelected && (structure.type === 'array' || structure.type === 'table')) {
           const edgeWidth = 4 // Width of the draggable edge area
           
-          // Left edge resize area
-          overlays.push(
-            <div
-              key={`resize-left-${key}`}
-              className="absolute cursor-ew-resize"
-              style={{
-                left: overlayLeft,
-                top: overlayTop,
-                width: edgeWidth,
-                height: overlayHeight,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('left', e)}
-              title="Resize horizontally"
-            />
-          )
+          // For arrays, only show resize handles for the direction they can expand
+          const isArray = structure.type === 'array'
+          const arrayDirection = isArray ? (structure as StructureArray).direction : null
           
-          // Right edge resize area
-          overlays.push(
-            <div
-              key={`resize-right-${key}`}
-              className="absolute cursor-ew-resize"
-              style={{
-                left: overlayLeft + overlayWidth - edgeWidth,
-                top: overlayTop,
-                width: edgeWidth,
-                height: overlayHeight,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('right', e)}
-              title="Resize horizontally"
-            />
-          )
+          // Left edge resize area - show for tables or horizontal arrays
+          if (!isArray || arrayDirection === 'horizontal') {
+            overlays.push(
+              <div
+                key={`resize-left-${key}`}
+                className="absolute cursor-ew-resize"
+                style={{
+                  left: overlayLeft,
+                  top: overlayTop,
+                  width: edgeWidth,
+                  height: overlayHeight,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('left', e)}
+                title="Resize horizontally"
+              />
+            )
+          }
           
-          // Top edge resize area
-          overlays.push(
-            <div
-              key={`resize-top-${key}`}
-              className="absolute cursor-ns-resize"
-              style={{
-                left: overlayLeft,
-                top: overlayTop,
-                width: overlayWidth,
-                height: edgeWidth,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('top', e)}
-              title="Resize vertically"
-            />
-          )
+          // Right edge resize area - show for tables or horizontal arrays
+          if (!isArray || arrayDirection === 'horizontal') {
+            overlays.push(
+              <div
+                key={`resize-right-${key}`}
+                className="absolute cursor-ew-resize"
+                style={{
+                  left: overlayLeft + overlayWidth - edgeWidth,
+                  top: overlayTop,
+                  width: edgeWidth,
+                  height: overlayHeight,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('right', e)}
+                title="Resize horizontally"
+              />
+            )
+          }
           
-          // Bottom edge resize area
-          overlays.push(
-            <div
-              key={`resize-bottom-${key}`}
-              className="absolute cursor-ns-resize"
-              style={{
-                left: overlayLeft,
-                top: overlayTop + overlayHeight - edgeWidth,
-                width: overlayWidth,
-                height: edgeWidth,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('bottom', e)}
-              title="Resize vertically"
-            />
-          )
+          // Top edge resize area - show for tables or vertical arrays
+          if (!isArray || arrayDirection === 'vertical') {
+            overlays.push(
+              <div
+                key={`resize-top-${key}`}
+                className="absolute cursor-ns-resize"
+                style={{
+                  left: overlayLeft,
+                  top: overlayTop,
+                  width: overlayWidth,
+                  height: edgeWidth,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('top', e)}
+                title="Resize vertically"
+              />
+            )
+          }
           
-          // Corner resize areas
-          // Top-left corner
-          overlays.push(
-            <div
-              key={`resize-corner-tl-${key}`}
-              className="absolute cursor-nw-resize"
-              style={{
-                left: overlayLeft,
-                top: overlayTop,
-                width: edgeWidth,
-                height: edgeWidth,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('corner-tl', e)}
-              title="Resize both directions"
-            />
-          )
+          // Bottom edge resize area - show for tables or vertical arrays
+          if (!isArray || arrayDirection === 'vertical') {
+            overlays.push(
+              <div
+                key={`resize-bottom-${key}`}
+                className="absolute cursor-ns-resize"
+                style={{
+                  left: overlayLeft,
+                  top: overlayTop + overlayHeight - edgeWidth,
+                  width: overlayWidth,
+                  height: edgeWidth,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE,
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('bottom', e)}
+                title="Resize vertically"
+              />
+            )
+          }
           
-          // Top-right corner
-          overlays.push(
-            <div
-              key={`resize-corner-tr-${key}`}
-              className="absolute cursor-ne-resize"
-              style={{
-                left: overlayLeft + overlayWidth - edgeWidth,
-                top: overlayTop,
-                width: edgeWidth,
-                height: edgeWidth,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('corner-tr', e)}
-              title="Resize both directions"
-            />
-          )
+          // Corner resize areas - only show for tables (arrays can't resize in both directions)
+          if (!isArray) {
+            // Top-left corner
+            overlays.push(
+              <div
+                key={`resize-corner-tl-${key}`}
+                className="absolute cursor-nw-resize"
+                style={{
+                  left: overlayLeft,
+                  top: overlayTop,
+                  width: edgeWidth,
+                  height: edgeWidth,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('corner-tl', e)}
+                title="Resize both directions"
+              />
+            )
+            
+            // Top-right corner
+            overlays.push(
+              <div
+                key={`resize-corner-tr-${key}`}
+                className="absolute cursor-ne-resize"
+                style={{
+                  left: overlayLeft + overlayWidth - edgeWidth,
+                  top: overlayTop,
+                  width: edgeWidth,
+                  height: edgeWidth,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('corner-tr', e)}
+                title="Resize both directions"
+              />
+            )
+            
+            // Bottom-left corner
+            overlays.push(
+              <div
+                key={`resize-corner-bl-${key}`}
+                className="absolute cursor-sw-resize"
+                style={{
+                  left: overlayLeft,
+                  top: overlayTop + overlayHeight - edgeWidth,
+                  width: edgeWidth,
+                  height: edgeWidth,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('corner-bl', e)}
+                title="Resize both directions"
+              />
+            )
+            
+            // Bottom-right corner
+            overlays.push(
+              <div
+                key={`resize-corner-br-${key}`}
+                className="absolute cursor-nw-resize"
+                style={{
+                  left: overlayLeft + overlayWidth - edgeWidth,
+                  top: overlayTop + overlayHeight - edgeWidth,
+                  width: edgeWidth,
+                  height: edgeWidth,
+                  zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
+                  pointerEvents: 'auto'
+                }}
+                onMouseDown={(e) => handleStructureResizeMouseDown('corner-br', e)}
+                title="Resize both directions"
+              />
+            )
+          }
+        }
+
+        // Add invisible hover areas for add buttons when this structure is selected
+        if (isSelected && (structure.type === 'table' || structure.type === 'array')) {
+          const buttonWidth = 20
           
-          // Bottom-left corner
-          overlays.push(
-            <div
-              key={`resize-corner-bl-${key}`}
-              className="absolute cursor-sw-resize"
-              style={{
-                left: overlayLeft,
-                top: overlayTop + overlayHeight - edgeWidth,
-                width: edgeWidth,
-                height: edgeWidth,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('corner-bl', e)}
-              title="Resize both directions"
-            />
-          )
+          // For arrays, only show buttons for the direction they can expand
+          const isArray = structure.type === 'array'
+          const arrayDirection = isArray ? (structure as StructureArray).direction : null
           
-          // Bottom-right corner
-          overlays.push(
-            <div
-              key={`resize-corner-br-${key}`}
-              className="absolute cursor-nw-resize"
-              style={{
-                left: overlayLeft + overlayWidth - edgeWidth,
-                top: overlayTop + overlayHeight - edgeWidth,
-                width: edgeWidth,
-                height: edgeWidth,
-                zIndex: Z_INDEX.STRUCTURE_RESIZE_HANDLE + 1, // Higher priority than edges
-                pointerEvents: 'auto'
-              }}
-              onMouseDown={(e) => handleStructureResizeMouseDown('corner-br', e)}
-              title="Resize both directions"
-            />
-          )
+          // Left edge hover area - show for tables or horizontal arrays
+          if (startPosition.col > 0 && (!isArray || arrayDirection === 'horizontal')) {
+            overlays.push(
+              <div
+                key={`add-hover-left-${key}`}
+                className="absolute"
+                style={{
+                  left: overlayLeft - buttonWidth,
+                  top: overlayTop,
+                  width: buttonWidth,
+                  height: overlayHeight,
+                  zIndex: Z_INDEX.STRUCTURE_OVERLAY + 15,
+                  pointerEvents: 'auto'
+                }}
+                onMouseEnter={() => {
+                  setHoveredAddButton({
+                    type: 'column',
+                    position: 'left',
+                    structureId: structure.id,
+                    insertIndex: startPosition.col,
+                    x: overlayLeft - buttonWidth,
+                    y: overlayTop
+                  })
+                }}
+                onMouseLeave={() => setHoveredAddButton(null)}
+              />
+            )
+          }
+          
+          // Right edge hover area - show for tables or horizontal arrays
+          if (endPosition.col < 25 && (!isArray || arrayDirection === 'horizontal')) { // 26 columns total (0-25)
+            overlays.push(
+              <div
+                key={`add-hover-right-${key}`}
+                className="absolute"
+                style={{
+                  left: overlayLeft + overlayWidth,
+                  top: overlayTop,
+                  width: buttonWidth,
+                  height: overlayHeight,
+                  zIndex: Z_INDEX.STRUCTURE_OVERLAY + 15,
+                  pointerEvents: 'auto'
+                }}
+                onMouseEnter={() => {
+                  setHoveredAddButton({
+                    type: 'column',
+                    position: 'right',
+                    structureId: structure.id,
+                    insertIndex: endPosition.col,
+                    x: overlayLeft + overlayWidth,
+                    y: overlayTop
+                  })
+                }}
+                onMouseLeave={() => setHoveredAddButton(null)}
+              />
+            )
+          }
+          
+          // Bottom edge hover area - show for tables or vertical arrays
+          if (endPosition.row < MAX_ROWS - 1 && (!isArray || arrayDirection === 'vertical')) {
+            overlays.push(
+              <div
+                key={`add-hover-bottom-${key}`}
+                className="absolute"
+                style={{
+                  left: overlayLeft,
+                  top: overlayTop + overlayHeight,
+                  width: overlayWidth,
+                  height: buttonWidth,
+                  zIndex: Z_INDEX.STRUCTURE_OVERLAY + 15,
+                  pointerEvents: 'auto'
+                }}
+                onMouseEnter={() => {
+                  setHoveredAddButton({
+                    type: 'row',
+                    position: 'bottom',
+                    structureId: structure.id,
+                    insertIndex: endPosition.row,
+                    x: overlayLeft,
+                    y: overlayTop + overlayHeight
+                  })
+                }}
+                onMouseLeave={() => setHoveredAddButton(null)}
+              />
+            )
+          }
         }
 
         // Mark this structure as processed
@@ -1271,7 +2347,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         overlays.push(
           <div
             key={`column-selection-${selectedColIndex}`}
-            className="absolute pointer-events-none border-4 border-green-700"
+            className="absolute pointer-events-none border-3 border-green-700"
             style={{
               left: columnLeft,
               top: tableTop,
@@ -1337,10 +2413,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       const tabTop = overlayTop - tabHeight
       
       // Choose tab color based on structure type (same for both named and unnamed structures)
-      const tabBgColor = selectedStructure.type === 'cell' ? 'bg-black' :
+      const tabBgColor = selectedStructure.type === 'cell' ? 'bg-gray-500' :
                         selectedStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-600'
-      const borderColor = selectedStructure.type === 'cell' ? 'border-black' :
+      const borderColor = selectedStructure.type === 'cell' ? 'border-gray-500' :
                          selectedStructure.type === 'array' ? 'border-blue-500' : 'border-green-600'
+      
       
       tabs.push(
         <div
@@ -1430,10 +2507,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       const tabLeft = overlayLeft
       const tabTop = overlayTop - tabHeight
       
-      // Choose tab color based on structure type
-      const tabBgColor = hoveredStructure.type === 'cell' ? 'bg-black' :
+      // Choose tab color based on structure type (same as selected structure tabs)
+      const tabBgColor = hoveredStructure.type === 'cell' ? 'bg-gray-500' :
                         hoveredStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-600'
-      const borderColor = hoveredStructure.type === 'cell' ? 'border-black' :
+      const borderColor = hoveredStructure.type === 'cell' ? 'border-gray-500' :
                          hoveredStructure.type === 'array' ? 'border-blue-500' : 'border-green-600'
       
       tabs.push(
@@ -1604,7 +2681,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               minHeight: cellHeight,
               zIndex: mergedCell ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
             }}
-            onMouseEnter={() => {
+            onMouseEnter={(e) => {
               handleMouseEnter(rowIndex, colIndex)
               if (isTableHeader(rowIndex, colIndex, structures)) {
                 handleHeaderHover(rowIndex, colIndex, true)
@@ -1627,11 +2704,19 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 handleColumnHeaderClick(rowIndex, colIndex)
               }
             }}
+            onMouseDown={(e) => {
+              if (isTableHeader(rowIndex, colIndex, structures)) {
+                e.stopPropagation()
+                handleColumnHeaderMouseDown(rowIndex, colIndex, e)
+              } else {
+                handleMouseDown(rowIndex, colIndex, e)
+              }
+            }}
           >
             {renderCellContent(
               rowIndex,
               colIndex,
-              mergedCell ? mergedCell.value : cellData.get(`${rowIndex}-${colIndex}`) || '',
+              mergedCell ? mergedCell.value : getCellValue(rowIndex, colIndex, structures),
               isSelected,
               structure,
               !!mergedCell
@@ -1645,57 +2730,105 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return rows
   }
 
-  // // Render add column button overlay
-  // const renderAddColumnButton = () => {
-  //   if (!showAddColumnButton || !hoveredHeaderCell) return null
+  // Render add button overlay
+  const renderAddButtons = () => {
+    if (!hoveredAddButton) return null
 
-  //   const { row, col } = hoveredHeaderCell
+    const { type, position, structureId, insertIndex } = hoveredAddButton
+    
+    // Find the structure to get its dimensions
+    const structure = structures.get(structureId)
+    if (!structure || (structure.type !== 'table' && structure.type !== 'array')) return null
+    
+    const structureData = structure as any
+    const buttonWidth = 20
+    
+    // Calculate structure position and dimensions
+    const structureLeft = getColumnPosition(structureData.startPosition.col, columnWidths)
+    const structureTop = getRowPosition(structureData.startPosition.row, rowHeights)
+    
+    let structureWidth = 0
+    for (let c = structureData.startPosition.col; c <= structureData.endPosition.col; c++) {
+      structureWidth += getColumnWidth(c, columnWidths)
+    }
+    
+    let structureHeight = 0
+    for (let r = structureData.startPosition.row; r <= structureData.endPosition.row; r++) {
+      structureHeight += getRowHeight(r, rowHeights)
+    }
 
-  //   // Check if the button position is visible in current viewport
-  //   if (row >= startRow && row < endRow && col >= startCol && col < endCol) {
-  //     const buttonWidth = 20
-  //     const buttonLeft = getColumnPosition(col, columnWidths)
-  //     const buttonTop = getRowPosition(row, rowHeights)
+    let buttonLeft: number
+    let buttonTop: number
+    let buttonWidthFinal: number
+    let buttonHeightFinal: number
+    let buttonTitle: string
 
-  //     return (
-  //       <button
-  //         className="absolute bg-green-600 bg-opacity-100 border border-white flex items-center justify-center text-white font-bold text-sm hover:bg-opacity-90 transition-all duration-200"
-  //         onClick={() => {
-  //           // Find the table structure to add column to
-  //           for (const [key, structure] of structures) {
-  //             if (structure.type === 'table') {
-  //               const table = structure as any
-  //               const headerLevel = getHeaderLevel(row, table)
-                
-  //               // For both top-level and sub-level headers, add column after the hovered cell
-  //               if (headerLevel >= 0 && row >= table.startPosition.row && 
-  //                   row < table.startPosition.row + (table.headerRows || 1) &&
-  //                   col === hoveredHeaderCell?.col) {
-                  
-  //                 onAddColumn(table.position.row, table.position.col, col - 1)
-  //                 break
-  //               }
-  //             }
-  //           }
-  //         }}
-  //         style={{
-  //           left: buttonLeft - buttonWidth,
-  //           top: buttonTop,
-  //           width: buttonWidth,
-  //           height: getColumnHeight(row, col, structures),
-  //           minWidth: buttonWidth,
-  //           minHeight: getColumnHeight(row, col, structures),
-  //           zIndex: 50
-  //         }}
-  //         title="Add column"
-  //       >
-  //         +
-  //       </button>
-  //     )
-  //   }
+    if (type === 'column') {
+      // Column buttons extend the full height of the structure
+      buttonWidthFinal = buttonWidth
+      buttonHeightFinal = structureHeight
+      buttonTop = structureTop
+      
+      if (position === 'left') {
+        buttonLeft = structureLeft - buttonWidth
+        buttonTitle = 'Add column to the left'
+      } else {
+        buttonLeft = structureLeft + structureWidth
+        buttonTitle = 'Add column to the right'
+      }
+    } else {
+      // Row button extends the full width of the structure
+      buttonWidthFinal = structureWidth
+      buttonHeightFinal = buttonWidth
+      buttonLeft = structureLeft
+      buttonTop = structureTop + structureHeight
+      buttonTitle = 'Add row below'
+    }
 
-  //   return null
-  // }
+    // Choose button color based on structure type
+    const buttonColor = structure.type === 'array' ? 'bg-blue-500' : 'bg-green-600'
+
+    return (
+      <button
+        className={`absolute ${buttonColor} bg-opacity-100 flex items-center justify-center text-white font-bold text-sm hover:bg-opacity-90 transition-all duration-200`}
+        onMouseEnter={() => {
+          // Maintain hover state when hovering over the button itself
+          setHoveredAddButton({
+            type,
+            position,
+            structureId,
+            insertIndex,
+            x: buttonLeft,
+            y: buttonTop
+          })
+        }}
+        onMouseLeave={() => {
+          // Only clear hover state when leaving the button
+          setHoveredAddButton(null)
+        }}
+        onClick={() => {
+          if (type === 'column') {
+            handleAddColumn(structureId, insertIndex, position as 'left' | 'right')
+          } else {
+            handleAddRow(structureId, insertIndex, 'bottom')
+          }
+          setHoveredAddButton(null)
+        }}
+        style={{
+          left: buttonLeft,
+          top: buttonTop,
+          width: buttonWidthFinal,
+          height: buttonHeightFinal,
+          minWidth: buttonWidthFinal,
+          minHeight: buttonHeightFinal,
+          zIndex: Z_INDEX.STRUCTURE_OVERLAY + 20
+        }}
+        title={buttonTitle}
+      >
+        +
+      </button>
+    )
+  }
 
   return (
     <div 
@@ -1733,7 +2866,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         {/* Drop target overlay for structure dragging */}
         {isDraggingStructure && dropTarget && draggedStructure && (
           <div
-            className="absolute border-4 border-dashed border-blue-600 bg-blue-100 bg-opacity-30 pointer-events-none"
+            className="absolute border-4 border-dashed border-blue-600 pointer-events-none"
             style={{
               left: getColumnPosition(dropTarget.col, columnWidths),
               top: getRowPosition(dropTarget.row, rowHeights),
@@ -1757,8 +2890,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           />
         )}
         
-        {/* Add column button overlay */}
-        {/* {renderAddColumnButton()} */}
+        {/* Add buttons overlay */}
+        {renderAddButtons()}
+        
+
       </div>
     </div>
   )

@@ -4,6 +4,11 @@ export type Position = {
   col: number
 }
 
+export type Dimensions = {
+  rows: number
+  cols: number
+}
+
 export type Cell = {
   type: 'cell'
   id: string
@@ -20,7 +25,8 @@ export type StructureArray = {
   endPosition: Position
   name?: string
   cells: Cell[]
-  dimensions: { rows: number, cols: number }
+  size: number
+  direction: 'horizontal' | 'vertical'
 }
 
 export type Column = {
@@ -39,7 +45,6 @@ export type Table = {
   endPosition: Position
   name?: string
   arrays: StructureArray[]
-  dimensions: { rows: number, cols: number }
   hasHeaderRow?: boolean
   hasHeaderCol?: boolean
   headerRows?: number
@@ -71,6 +76,7 @@ export type ContextMenuProps = {
   getStructureAtPositionSafe: (row: number, col: number) => Structure | undefined
   updateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
   createStructureFromToolbar: (type: Structure['type']) => void
+  rotateArray: (arrayId: string) => void
   canMerge: boolean
   canUnmerge: boolean
   canCreateStructures: boolean
@@ -87,7 +93,6 @@ export type StructurePanelProps = {
   selectedStructure: Structure | null
   selectedColumn: {tableId: string, columnIndex: number} | null
   expandedTableColumns: Set<string>
-  onCreateStructure: (type: Structure['type'], name: string, dimensions?: {rows: number, cols: number}) => void
   onUpdateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
   onSelectColumn: (tableId: string, columnIndex: number) => void
   onToggleTableColumns: (tableKey: string) => void

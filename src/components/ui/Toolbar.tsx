@@ -38,7 +38,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       
       <button
         onClick={() => onCreateStructure('array')}
-        disabled={!hasSelection}
+        disabled={!hasSelection || (selectionInfo?.rows !== 1 && selectionInfo?.cols !== 1)}
         className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
       >
         Array

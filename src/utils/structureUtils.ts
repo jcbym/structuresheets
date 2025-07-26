@@ -1,14 +1,6 @@
-import { MergedCell, Position, Structure, Table } from '../types'
-import { DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, DEFAULT_HEADER_HEIGHT, DEFAULT_HEADER_WIDTH, MAX_COLS, MAX_ROWS } from '../constants'
-
-// UUID generation utility
-export const generateUUID = (): string => {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0
-    const v = c === 'x' ? r : (r & 0x3 | 0x8)
-    return v.toString(16)
-  })
-}
+import { Dimensions, MergedCell, Position, Structure, Table, StructureArray } from '../types'
+import { DEFAULT_CELL_HEIGHT } from '../constants'
+import { isValidPosition } from './sheetUtils'
 
 // Key generation utilities
 export const getCellKey = (row: number, col: number): string => `${row}-${col}`
@@ -18,88 +10,41 @@ export const getStructureKey = (row: number, col: number): string => `struct-${r
 export const getMergedCellKey = (startRow: number, startCol: number, endRow: number, endCol: number): string => 
   `merged-${startRow}-${startCol}-${endRow}-${endCol}`
 
-// Dimension calculation utilities
-export const getColumnWidth = (colIndex: number, columnWidths: Map<number, number>): number => {
-  return columnWidths.get(colIndex) || DEFAULT_CELL_WIDTH
-}
-
-export const getRowHeight = (rowIndex: number, rowHeights: Map<number, number>): number => {
-  return rowHeights.get(rowIndex) || DEFAULT_CELL_HEIGHT
-}
-
-export const getHeaderHeight = (): number => DEFAULT_HEADER_HEIGHT
-
-export const getHeaderWidth = (): number => DEFAULT_HEADER_WIDTH
-
-// Position calculation utilities
-export const getColumnPosition = (colIndex: number, columnWidths: Map<number, number>): number => {
-  let position = getHeaderWidth()
-  for (let i = 0; i < colIndex; i++) {
-    position += getColumnWidth(i, columnWidths)
-  }
-  return position
-}
-
-export const getRowPosition = (rowIndex: number, rowHeights: Map<number, number>): number => {
-  let position = getHeaderHeight()
-  for (let i = 0; i < rowIndex; i++) {
-    position += getRowHeight(i, rowHeights)
-  }
-  return position
-}
-
-// Viewport calculation utilities
-export const calculateVisibleCols = (
-  scrollLeft: number, 
-  viewportWidth: number, 
-  columnWidths: Map<number, number>
-): { startCol: number; endCol: number } => {
-  let startCol = 0
-  let currentPos = getHeaderWidth()
-  
-  // Find start column
-  while (startCol < MAX_COLS && currentPos + getColumnWidth(startCol, columnWidths) < scrollLeft) {
-    currentPos += getColumnWidth(startCol, columnWidths)
-    startCol++
-  }
-  
-  // Find end column
-  let endCol = startCol
-  while (endCol < MAX_COLS && currentPos < scrollLeft + viewportWidth) {
-    currentPos += getColumnWidth(endCol, columnWidths)
-    endCol++
-  }
-  
-  return { startCol: Math.max(0, startCol), endCol: Math.min(MAX_COLS, endCol + 2) }
-}
-
-export const calculateVisibleRows = (
-  scrollTop: number, 
-  viewportHeight: number, 
-  rowHeights: Map<number, number>
-): { startRow: number; endRow: number } => {
-  let startRow = 0
-  let currentPos = getHeaderHeight()
-  
-  // Find start row
-  while (startRow < MAX_ROWS && currentPos + getRowHeight(startRow, rowHeights) < scrollTop) {
-    currentPos += getRowHeight(startRow, rowHeights)
-    startRow++
-  }
-  
-  // Find end row
-  let endRow = startRow
-  while (endRow < MAX_ROWS && currentPos < scrollTop + viewportHeight) {
-    currentPos += getRowHeight(endRow, rowHeights)
-    endRow++
-  }
-  
-  return { startRow: Math.max(0, startRow), endRow: Math.min(MAX_ROWS, endRow + 5) }
-}
-
 // Cell and structure utilities
-export const getCellValue = (row: number, col: number, cellData: Map<string, string>): string => {
-  return cellData.get(getCellKey(row, col)) || ''
+export const getCellValue = (row: number, col: number, structures: Map<string, Structure>): string => {
+  // First check if there's a structure at this position
+  const structure = getStructureAtPosition(row, col, structures)
+  
+  if (structure) {
+    if (structure.type === 'cell') {
+      return structure.value || ''
+    }
+    
+    // For arrays and tables, find the specific cell within the structure
+    if (structure.type === 'array') {
+      const arrayStructure = structure as StructureArray
+      const cellIndex = (row - structure.startPosition.row) * (structure.endPosition.col - structure.startPosition.col + 1) + 
+                       (col - structure.startPosition.col)
+      if (cellIndex >= 0 && cellIndex < arrayStructure.cells.length) {
+        return arrayStructure.cells[cellIndex].value || ''
+      }
+    }
+    
+    if (structure.type === 'table') {
+      const tableStructure = structure as Table
+      const rowIndex = row - structure.startPosition.row
+      if (rowIndex >= 0 && rowIndex < tableStructure.arrays.length) {
+        const arrayInTable = tableStructure.arrays[rowIndex]
+        const colIndex = col - structure.startPosition.col
+        if (colIndex >= 0 && colIndex < arrayInTable.cells.length) {
+          return arrayInTable.cells[colIndex].value || ''
+        }
+      }
+    }
+  }
+  
+  // No structure found, return empty string
+  return ''
 }
 
 export const getStructureAtPosition = (row: number, col: number, structures: Map<string, Structure>): Structure | undefined => {
@@ -115,6 +60,14 @@ export const getStructureAtPosition = (row: number, col: number, structures: Map
     }
   }
   return undefined
+}
+
+export const getDimensions = (structure: Structure): Dimensions => {
+  const { startPosition, endPosition } = structure
+  return {
+    rows: endPosition.row - startPosition.row + 1,
+    cols: endPosition.col - startPosition.col + 1
+  }
 }
 
 // Merged cell utilities
@@ -176,28 +129,6 @@ export const getHeaderLevel = (row: number, table: Table): number => {
   return relativeRow
 }
 
-// Navigation utilities
-export const getNextCell = (row: number, col: number, direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'): {row: number, col: number} => {
-  let newRow = row
-  let newCol = col
-
-  switch (direction) {
-    case 'ArrowUp':
-      newRow = Math.max(0, row - 1)
-      break
-    case 'ArrowDown':
-      newRow = Math.min(MAX_ROWS - 1, row + 1)
-      break
-    case 'ArrowLeft':
-      newCol = Math.max(0, col - 1)
-      break
-    case 'ArrowRight':
-      newCol = Math.min(MAX_COLS - 1, col + 1)
-      break
-  }
-
-  return { row: newRow, col: newCol }
-}
 
 // Add column utilities
 export const getColumnHeight = (row: number, col: number, structures: Map<string, Structure>): number => {
@@ -262,23 +193,14 @@ export const isGhostedColumn = (row: number, col: number, hoveredHeaderCell: {ro
   return false
 }
 
-// Validation utilities
-export const isValidPosition = (row: number, col: number): boolean => {
-  return row >= 0 && row < MAX_ROWS && col >= 0 && col < MAX_COLS
-}
-
-export const isValidRange = (startRow: number, startCol: number, endRow: number, endCol: number): boolean => {
-  return isValidPosition(startRow, startCol) && isValidPosition(endRow, endCol)
-}
-
 // Drag and drop utilities
-export const getCellsInStructure = (structure: Structure, cellData: Map<string, string>): Array<{row: number, col: number, value: string}> => {
+export const getCellsInStructure = (structure: Structure, structures: Map<string, Structure>): Array<{row: number, col: number, value: string}> => {
   const cells = []
   const { startPosition, endPosition } = structure
   
   for (let row = startPosition.row; row <= endPosition.row; row++) {
     for (let col = startPosition.col; col <= endPosition.col; col++) {
-      const value = cellData.get(getCellKey(row, col)) || ''
+      const value = getCellValue(row, col, structures)
       cells.push({ row, col, value })
     }
   }
@@ -337,7 +259,7 @@ export const moveStructureCells = (
   overwriteExisting: boolean = false
 ): Map<string, string> => {
   const newCellData = new Map(cellData)
-  const structureCells = getCellsInStructure(structure, cellData)
+  const structureCells = getCellsInStructure(structure, new Map()) // Pass empty structures map since we're using cellData here
   
   // Clear old positions
   for (const cell of structureCells) {

@@ -14,11 +14,28 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   getStructureAtPositionSafe,
   updateTableHeaders,
   createStructureFromToolbar,
+  rotateArray,
   canMerge, 
   canUnmerge, 
   canCreateStructures
 }) => {
   const menuRef = React.useRef<HTMLDivElement>(null)
+
+  const MenuButton: React.FC<{
+      onClick?: () => void
+      enabled?: boolean
+      children: React.ReactNode
+    }> = ({ onClick, enabled, children }) => (
+      <button
+        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
+          enabled ? '' : 'text-gray-400 cursor-not-allowed'
+        }`}
+        onClick={enabled ? onClick : undefined}
+        disabled={!enabled}
+      >
+        {children}
+      </button>
+    )
 
   // Event handlers
   const canAddHeaderLevels = (): boolean => {
@@ -83,73 +100,50 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   // Determine what to show based on selection
   const hasMultipleCellsSelected = selectedRange !== null
   const hasTableSelected = selectedStructure?.type === 'table'
+  const hasArraySelected = selectedStructure?.type === 'array'
 
   const renderMultipleCellsMenu = () => (
     <>
-      <button
-        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
-          !canMerge ? 'text-gray-400 cursor-not-allowed' : ''
-        }`}
-        onClick={canMerge ? onMergeCells : undefined}
-        disabled={!canMerge}
-      >
+      <MenuButton onClick={onMergeCells} enabled={canMerge}>
         Merge Cells
-      </button>
-      <button
-        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
-          !canUnmerge ? 'text-gray-400 cursor-not-allowed' : ''
-        }`}
-        onClick={canUnmerge ? onUnmergeCells : undefined}
-        disabled={!canUnmerge}
-      >
+      </MenuButton>
+      <MenuButton onClick={onUnmergeCells} enabled={canUnmerge}>
         Unmerge Cells
-      </button>
-      
+      </MenuButton>
       <hr className="my-1 border-gray-200" />
-      
-      <button
-        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
-          !canCreateStructures ? 'text-gray-400 cursor-not-allowed' : ''
-        }`}
-        onClick={canCreateStructures ? handleCreateArray : undefined}
-        disabled={!canCreateStructures}
-      >
+      <MenuButton onClick={handleCreateArray} enabled={canCreateStructures}>
         Create Array
-      </button>
-      
-      <button
-        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
-          !canCreateStructures ? 'text-gray-400 cursor-not-allowed' : ''
-        }`}
-        onClick={canCreateStructures ? handleCreateTable : undefined}
-        disabled={!canCreateStructures}
-      >
+      </MenuButton>
+      <MenuButton onClick={handleCreateTable} enabled={canCreateStructures}>
         Create Table
-      </button>
+      </MenuButton>
     </>
   )
 
   const renderTableMenu = () => (
     <>
-      <button
-        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
-          !canAddHeaderLevels() ? 'text-gray-400 cursor-not-allowed' : ''
-        }`}
-        onClick={canAddHeaderLevels() ? handleAddColumnHeaderLevel : undefined}
-        disabled={!canAddHeaderLevels()}
-      >
+      <MenuButton onClick={handleAddColumnHeaderLevel} enabled={canAddHeaderLevels()}>
         Add Column Header Level
-      </button>
-      
-      <button
-        className={`w-full text-left px-3 py-2 hover:bg-gray-100 text-sm ${
-          !canAddHeaderLevels() ? 'text-gray-400 cursor-not-allowed' : ''
-        }`}
-        onClick={canAddHeaderLevels() ? handleAddRowHeaderLevel : undefined}
-        disabled={!canAddHeaderLevels()}
-      >
+      </MenuButton>
+      <MenuButton onClick={handleAddRowHeaderLevel} enabled={canAddHeaderLevels()}>
         Add Row Header Level
-      </button>
+      </MenuButton>
+    </>
+  )
+
+  const renderArrayMenu = () => (
+    <>
+      <MenuButton 
+        onClick={() => {
+          if (selectedStructure && selectedStructure.type === 'array') {
+            rotateArray(selectedStructure.id)
+            setContextMenu(null)
+          }
+        }}
+        enabled={hasArraySelected}
+      >
+        Rotate Array
+      </MenuButton>
     </>
   )
 
@@ -161,6 +155,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     >
       {hasMultipleCellsSelected && renderMultipleCellsMenu()}
       {hasTableSelected && renderTableMenu()}
+      {hasArraySelected && renderArrayMenu()}
     </div>
   )
 }
