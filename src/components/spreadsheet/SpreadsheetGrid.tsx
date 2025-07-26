@@ -29,7 +29,6 @@ import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE, MAX_ROWS } from '../../constant
 
 interface SpreadsheetGridProps {
   // State
-  cellData: Map<string, string>
   structures: Map<string, Structure>
   mergedCells: Map<string, MergedCell>
   selectedCell: {row: number, col: number} | null
@@ -70,7 +69,6 @@ interface SpreadsheetGridProps {
   } | null
   
   // State setters
-  setCellData: React.Dispatch<React.SetStateAction<Map<string, string>>>
   setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>
   setSelectedCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
   setSelectedRange: React.Dispatch<React.SetStateAction<{start: {row: number, col: number}, end: {row: number, col: number}} | null>>
@@ -112,13 +110,13 @@ interface SpreadsheetGridProps {
   
   // Event handlers
   onCellUpdate: (row: number, col: number, value: string) => void
+  onDeleteStructure?: (structureId: string) => void
   
   // Container ref
   containerRef: React.RefObject<HTMLDivElement>
 }
 
 export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
-  cellData,
   structures,
   mergedCells,
   selectedCell,
@@ -159,7 +157,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setStructureResizeStartDimensions,
   setStructureResizeStartX,
   setStructureResizeStartY,
-  setCellData,
   setStructures,
   setSelectedCell,
   setSelectedRange,
@@ -191,6 +188,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setShowConflictDialog,
   setConflictDialogData,
   onCellUpdate,
+  onDeleteStructure,
   containerRef
 }) => {
   const viewportWidth = window.innerWidth
@@ -282,10 +280,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     if (structure?.type === 'array') {
       return { ...baseStyle, backgroundColor: 'rgba(43, 127, 255, 0.1)' } // Transparent light blue
     }
-
-    if (structure?.type === 'cell') {
-      return { ...baseStyle, backgroundColor: '#f9fafb' } // Gray
-    } 
     
     return baseStyle
   }
@@ -297,10 +291,40 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return 'border-none' // No border for array/table cells (they get overlay borders)
   }
 
-  const handleCellBlur = (row: number, col: number) => {
+  const handleCellBlur = (row: number, col: number, e?: React.FocusEvent<HTMLInputElement>) => {
     const cellKey = getCellKey(row, col)
-    const cellValue = cellValues.get(cellKey) || ''
-    onCellUpdate(row, col, cellValue)
+    
+    // Get the value from the input element - be very explicit about this
+    let cellValue: string
+    if (e?.target) {
+      // Primary: get from the blur event target
+      cellValue = e.target.value
+    } else {
+      // Fallback: try to find the input element directly by its data attribute
+      const inputElement = document.querySelector(`input[data-cell-key="${cellKey}"]`) as HTMLInputElement
+      if (inputElement) {
+        cellValue = inputElement.value
+      } else {
+        // Final fallback: use React state
+        cellValue = cellValues.get(cellKey) || ''
+      }
+    }
+
+    // Check if there's already a structure at this position
+    const existingStructure = getStructureAtPosition(row, col, structures)
+    
+    // Update logic:
+    // - If there's an existing structure: ALWAYS update (allows clearing to empty string)
+    // - If no existing structure: only update if value is not empty (prevents creating empty cells)
+    if (existingStructure) {
+      // Always update existing structures, even with empty values
+      onCellUpdate(row, col, cellValue)
+    } else if (cellValue !== '') {
+      // Only create new structures for non-empty values
+      onCellUpdate(row, col, cellValue)
+    }
+    
+    // Stop editing immediately
     setEditingCells(prev => {
       const newSet = new Set(prev)
       newSet.delete(cellKey)
@@ -332,6 +356,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       e.preventDefault()
       const cellKey = getCellKey(row, col)
       const cellValue = cellValues.get(cellKey) || ''
+      
       onCellUpdate(row, col, cellValue)
       setEditingCells(prev => {
         const newSet = new Set(prev)
@@ -367,20 +392,39 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setEditingCells(new Set())
   }
 
-  // Sync cell values with cellData
-  // TODO: determine if this is necessary
+  // Sync cell values with structures
   React.useEffect(() => {
     setCellValues(prev => {
-      const newMap = new Map(cellData)
-      // Keep any values that are currently being edited
-      for (const [key, value] of prev) {
-        if (editingCells.has(key) && !newMap.has(key)) {
-          newMap.set(key, value)
+      const newMap = new Map()
+      
+      // First, preserve ALL editing cell values exactly as they are
+      for (const cellKey of editingCells) {
+        if (prev.has(cellKey)) {
+          newMap.set(cellKey, prev.get(cellKey)!)
         }
       }
+      
+      // Add values from structures (but only for cells not currently being edited)
+      for (let row = startRow; row < endRow; row++) {
+        for (let col = startCol; col < endCol; col++) {
+          const cellKey = getCellKey(row, col)
+          
+          // Skip if this cell is currently being edited - already handled above
+          if (editingCells.has(cellKey)) {
+            continue
+          }
+          
+          // Only sync from structures for non-editing cells
+          const structureValue = getCellValue(row, col, structures)
+          if (structureValue !== '') {
+            newMap.set(cellKey, structureValue)
+          }
+        }
+      }
+      
       return newMap
     })
-  }, [cellData, editingCells])
+  }, [structures, editingCells, startRow, endRow, startCol, endCol])
 
   // Begin editing when startEditing is set
   React.useEffect(() => {
@@ -407,7 +451,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   ) => {
     const cellKey = getCellKey(row, col)
     const isEditing = editingCells.has(cellKey)
-    const cellValue = cellValues.get(cellKey) || value
+    // Use cellValues if it exists (even if empty string), otherwise fall back to value
+    const cellValue = cellValues.has(cellKey) ? cellValues.get(cellKey)! : value
 
     return (
       <div 
@@ -431,7 +476,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 return newMap
               })
             }}
-            onBlur={() => handleCellBlur(row, col)}
+            onBlur={(e) => handleCellBlur(row, col, e)}
             onFocus={() => handleCellFocusChange(row, col)}
             onKeyDown={(e) => handleCellKeyDown(e, row, col)}
             className="w-full h-full outline-none px-2 py-1 bg-transparent"
@@ -511,6 +556,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const handleCellEnterPress = (row: number, col: number) => {
     const nextRow = row + 1
     if (nextRow < MAX_ROWS) {
+      setSelectedRange(null)
       setSelectedCell({ row: nextRow, col })
       setStartEditing({ row: nextRow, col })
     }
@@ -877,30 +923,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       return newStructures
     })
     
-    // Shift cell data based on position
-    setCellData(prev => {
-      const newData = new Map(prev)
-      
-      if (position === 'left') {
-        // Shift all existing array data one column to the right
-        for (let r = arrayStructure.startPosition.row; r <= arrayStructure.endPosition.row; r++) {
-          for (let c = arrayStructure.endPosition.col; c >= arrayStructure.startPosition.col; c--) {
-            const oldKey = `${r}-${c}`
-            const newKey = `${r}-${c + 1}`
-            const value = newData.get(oldKey)
-            if (value) {
-              newData.set(newKey, value)
-            }
-            newData.delete(oldKey)
-          }
-        }
-      } else {
-        // For right insertion, no need to shift existing data
-        // New column will be empty by default
-      }
-      
-      return newData
-    })
     
     // Update selected structure if it's the same array
     if (selectedStructure && selectedStructure.id === arrayStructure.id) {
@@ -967,27 +989,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       return newStructures
     })
     
-    // Shift cell data for rows after the insertion point
-    setCellData(prev => {
-      const newData = new Map(prev)
-      
-      // Move data from bottom to top to avoid overwriting
-      for (let r = arrayStructure.endPosition.row; r >= insertRow; r--) {
-        for (let c = arrayStructure.startPosition.col; c <= arrayStructure.endPosition.col; c++) {
-          const oldKey = `${r}-${c}`
-          const newKey = `${r + 1}-${c}`
-          const value = newData.get(oldKey)
-          if (value) {
-            newData.set(newKey, value)
-          }
-          if (r >= insertRow) {
-            newData.delete(oldKey)
-          }
-        }
-      }
-      
-      return newData
-    })
     
     // Update selected structure if it's the same array
     if (selectedStructure && selectedStructure.id === arrayStructure.id) {
@@ -1100,27 +1101,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       return newStructures
     })
     
-    // Shift cell data for rows after the insertion point
-    setCellData(prev => {
-      const newData = new Map(prev)
-      
-      // Move data from bottom to top to avoid overwriting
-      for (let r = tableStructure.endPosition.row; r >= insertRow; r--) {
-        for (let c = tableStructure.startPosition.col; c <= tableStructure.endPosition.col; c++) {
-          const oldKey = `${r}-${c}`
-          const newKey = `${r + 1}-${c}`
-          const value = newData.get(oldKey)
-          if (value) {
-            newData.set(newKey, value)
-          }
-          if (r >= insertRow) {
-            newData.delete(oldKey)
-          }
-        }
-      }
-      
-      return newData
-    })
     
     // Update selected structure if it's the same table
     if (selectedStructure && selectedStructure.id === tableStructure.id) {
@@ -1226,6 +1206,30 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }, [selectedColumn, isDraggingColumn, isResizingSheetHeader, isResizingStructure, structures, setCellValues, setEditingCells, setSelectedCell])
 
+  // Global keydown event handler for Enter and Backspace behaviors
+  React.useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Only handle if not currently editing a cell and not in other drag/resize states
+      if (editingCells.size > 0 || isDraggingColumn || isResizingSheetHeader || isResizingStructure || isDraggingStructure) {
+        return
+      }
+
+      if (e.key === 'Backspace') {
+        // Backspace key: Delete selected structure (but not when editing text)
+        if (selectedStructure && onDeleteStructure) {
+          e.preventDefault()
+          onDeleteStructure(selectedStructure.id)
+        }
+      }
+    }
+
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    
+    return () => {
+      document.removeEventListener('keydown', handleGlobalKeyDown)
+    }
+  }, [selectedCell, selectedStructure, editingCells, isDraggingColumn, isResizingSheetHeader, isResizingStructure, isDraggingStructure, structures, onDeleteStructure])
+
   // Global mouse event handlers for resizing and dragging
   React.useEffect(() => {
     const handleGlobalMouseUp = () => {
@@ -1233,7 +1237,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         // Handle structure drag drop only if we have all required data and no conflict dialog
         if (isDraggingStructure && draggedStructure && dropTarget && !showConflictDialog) {
           const structureCells = getCellsInStructure(draggedStructure, structures)
-          const conflicts = detectConflicts(dropTarget, structureCells, cellData, draggedStructure)
+          const conflicts = detectConflicts(dropTarget, structureCells, structures, draggedStructure)
           
           if (conflicts.length > 0) {
             // Show conflict dialog
@@ -1247,16 +1251,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           } else {
 
             // No conflicts, proceed with move
-            const newCellData = moveStructureCells(draggedStructure, dropTarget, cellData, false)
-            setCellData(newCellData)
+            const newStructures = moveStructureCells(draggedStructure, dropTarget, structures, false)
             
             // Update structure position
             const updatedStructure = moveStructurePosition(draggedStructure, dropTarget)
-            setStructures(prev => {
-              const newStructures = new Map(prev)
-              newStructures.set(updatedStructure.id, updatedStructure)
-              return newStructures
-            })
+            const finalStructures = new Map(newStructures)
+            finalStructures.set(updatedStructure.id, updatedStructure)
+            
+            setStructures(finalStructures)
             
             // Update selected structure
             selectStructure(updatedStructure)
@@ -1300,40 +1302,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 return newStructures
               })
               
-              // Reorder cell data
-              setCellData(prev => {
-                const newData = new Map(prev)
-                
-                // For each row in the table, move the cell data
-                for (let r = tableStructure.startPosition.row; r <= tableStructure.endPosition.row; r++) {
-                  const rowData = []
-                  
-                  // Collect all cell values for this row
-                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
-                    const cellCol = tableStructure.startPosition.col + c
-                    const cellKey = `${r}-${cellCol}`
-                    rowData.push(newData.get(cellKey) || '')
-                  }
-                  
-                  // Reorder the row data
-                  const sourceValue = rowData[sourceColumnIndex]
-                  rowData.splice(sourceColumnIndex, 1)
-                  rowData.splice(targetColumnIndex, 0, sourceValue)
-                  
-                  // Write back the reordered data
-                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
-                    const cellCol = tableStructure.startPosition.col + c
-                    const cellKey = `${r}-${cellCol}`
-                    if (rowData[c]) {
-                      newData.set(cellKey, rowData[c])
-                    } else {
-                      newData.delete(cellKey)
-                    }
-                  }
-                }
-                
-                return newData
-              })
               
               // Update selected column to follow the moved column
               setSelectedColumn({ 
@@ -1491,40 +1459,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 return newStructures
               })
               
-              // Reorder cell data in real-time
-              setCellData(prev => {
-                const newData = new Map(prev)
-                
-                // For each row in the table, move the cell data
-                for (let r = tableStructure.startPosition.row; r <= tableStructure.endPosition.row; r++) {
-                  const rowData = []
-                  
-                  // Collect all cell values for this row
-                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
-                    const cellCol = tableStructure.startPosition.col + c
-                    const cellKey = `${r}-${cellCol}`
-                    rowData.push(newData.get(cellKey) || '')
-                  }
-                  
-                  // Reorder the row data
-                  const sourceValue = rowData[currentColumnIndex]
-                  rowData.splice(currentColumnIndex, 1)
-                  rowData.splice(targetColumnIndex, 0, sourceValue)
-                  
-                  // Write back the reordered data
-                  for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
-                    const cellCol = tableStructure.startPosition.col + c
-                    const cellKey = `${r}-${cellCol}`
-                    if (rowData[c]) {
-                      newData.set(cellKey, rowData[c])
-                    } else {
-                      newData.delete(cellKey)
-                    }
-                  }
-                }
-                
-                return newData
-              })
               
               // Update the dragged column index to track the new position
               setDraggedColumn({ 
@@ -1639,7 +1573,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                     id: `cell-${cellRow}-${cellCol}`,
                     startPosition: { row: cellRow, col: cellCol },
                     endPosition: { row: cellRow, col: cellCol },
-                    value: cellData.get(`${cellRow}-${cellCol}`) || ''
+                    value: getCellValue(cellRow, cellCol, structures)
                   })
                 }
               }
@@ -1687,7 +1621,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                   id: `cell-${cellRow}-${cellCol}`,
                   startPosition: { row: cellRow, col: cellCol },
                   endPosition: { row: cellRow, col: cellCol },
-                  value: cellData.get(`${cellRow}-${cellCol}`) || ''
+                  value: getCellValue(cellRow, cellCol, structures)
                 })
               }
               
@@ -1736,7 +1670,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     structureResizeStartX,
     structureResizeStartY,
     selectedStructure,
-    cellData,
     isDraggingStructure,
     draggedStructure,
     dragOffset,
@@ -1775,7 +1708,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setDraggedColumn,
     setColumnDragStartX,
     setColumnDropTarget,
-    setCellData
   ])
 
   // Render merged cell overlays
@@ -1802,7 +1734,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         overlays.push(
           <div
             key={`merged-overlay-${key}`}
-            className="absolute pointer-events-none border-2 border-orange-500 bg-orange-50"
+            className="absolute pointer-events-none border-1 border-gray-500"
             style={{
               left: overlayLeft,
               top: overlayTop,
@@ -2662,7 +2594,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         }
         
         // Add green column borders for tables (but not individual cell selection borders)
-        let borderClass = 'border border-gray-300'
+        let borderClass = 'border border-gray-200'
         if (structure && structure.type === 'table') {
           borderClass = 'border-l-1 border-r-1 border-t border-b border-l-green-600 border-r-green-600 border-t-gray-300 border-b-gray-300'
         }
@@ -2670,7 +2602,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         cells.push(
           <div
             key={`cell-${rowIndex}-${colIndex}`}
-            className={`${borderClass} ${isInRange ? 'bg-blue-100' : ''} ${mergedCell ? 'bg-orange-50' : ''}`}
+            className={`${borderClass} ${isInRange ? 'bg-blue-100' : ''} `}
             style={{
               position: 'absolute',
               left: getColumnPosition(colIndex, columnWidths),

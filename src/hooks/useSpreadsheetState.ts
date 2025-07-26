@@ -3,7 +3,6 @@ import { Position, Structure, MergedCell, SelectionRange, ResizeType } from '../
 
 export const useSpreadsheetState = () => {
   // Individual state hooks for better granular control
-  const [cellData, setCellData] = React.useState<Map<string, string>>(new Map())
   const [structures, setStructures] = React.useState<Map<string, Structure>>(new Map())
   const [mergedCells, setMergedCells] = React.useState<Map<string, MergedCell>>(new Map())
   const [selectedCell, setSelectedCell] = React.useState<{row: number, col: number} | null>(null)
@@ -49,7 +48,6 @@ export const useSpreadsheetState = () => {
 
   return {
     // State values
-    cellData,
     structures,
     mergedCells,
     selectedCell,
@@ -91,7 +89,6 @@ export const useSpreadsheetState = () => {
     columnDropTarget,
 
     // State setters
-    setCellData,
     setStructures,
     setMergedCells,
     setSelectedCell,

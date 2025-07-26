@@ -18,12 +18,7 @@ export const useCellOperations = (
         // Update cell structure value
         setStructures(prev => {
           const newStructures = new Map(prev)
-          if (value === '') {
-            // Remove cell structure if value is empty
-            newStructures.delete(existingStructure.id)
-          } else {
-            newStructures.set(existingStructure.id, { ...existingStructure, value })
-          }
+          newStructures.set(existingStructure.id, { ...existingStructure, value })
           return newStructures
         })
       } else if (existingStructure.type === 'array') {
@@ -69,8 +64,7 @@ export const useCellOperations = (
           }
         }
       }
-    } else if (value !== '') {
-      // No structure exists and value is not empty - create new Cell structure
+    } else {
       const newCellId = `cell-${row}-${col}-${Date.now()}`
       const newCell: Cell = {
         type: 'cell',

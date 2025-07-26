@@ -211,7 +211,7 @@ export const getCellsInStructure = (structure: Structure, structures: Map<string
 export const detectConflicts = (
   targetPosition: Position,
   structureCells: Array<{row: number, col: number, value: string}>,
-  cellData: Map<string, string>,
+  structures: Map<string, Structure>,
   sourceStructure?: Structure
 ): Array<{row: number, col: number, existingValue: string, newValue: string}> => {
   const conflicts = []
@@ -236,7 +236,7 @@ export const detectConflicts = (
       continue
     }
     
-    const existingValue = cellData.get(targetKey) || ''
+    const existingValue = getCellValue(targetRow, targetCol, structures)
     
     // Only consider it a conflict if both values are non-empty and different
     if (existingValue && cell.value && existingValue !== cell.value) {
@@ -255,15 +255,19 @@ export const detectConflicts = (
 export const moveStructureCells = (
   structure: Structure,
   targetPosition: Position,
-  cellData: Map<string, string>,
+  structures: Map<string, Structure>,
   overwriteExisting: boolean = false
-): Map<string, string> => {
-  const newCellData = new Map(cellData)
-  const structureCells = getCellsInStructure(structure, new Map()) // Pass empty structures map since we're using cellData here
+): Map<string, Structure> => {
+  const newStructures = new Map(structures)
+  const structureCells = getCellsInStructure(structure, structures)
   
-  // Clear old positions
+  // Clear old positions by removing cells that will be moved
   for (const cell of structureCells) {
-    newCellData.delete(getCellKey(cell.row, cell.col))
+    const existingStructure = getStructureAtPosition(cell.row, cell.col, newStructures)
+    if (existingStructure && existingStructure.id === structure.id) {
+      // This is part of the structure being moved, we'll handle it in the move
+      continue
+    }
   }
   
   // Set new positions
@@ -272,7 +276,7 @@ export const moveStructureCells = (
     const newCol = targetPosition.col + (cell.col - structure.startPosition.col)
     
     if (isValidPosition(newRow, newCol)) {
-      const existingValue = newCellData.get(getCellKey(newRow, newCol)) || ''
+      const existingValue = getCellValue(newRow, newCol, newStructures)
       const newValue = cell.value
       
       // Determine final value based on merge strategy
@@ -287,12 +291,28 @@ export const moveStructureCells = (
       // If only new value or both empty, use new value
       
       if (finalValue) {
-        newCellData.set(getCellKey(newRow, newCol), finalValue)
+        // Create or update cell structure at new position
+        const existingStructure = getStructureAtPosition(newRow, newCol, newStructures)
+        if (existingStructure && existingStructure.type === 'cell') {
+          // Update existing cell
+          newStructures.set(existingStructure.id, { ...existingStructure, value: finalValue })
+        } else if (!existingStructure) {
+          // Create new cell structure
+          const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
+          const newCell: Structure = {
+            type: 'cell',
+            id: newCellId,
+            startPosition: { row: newRow, col: newCol },
+            endPosition: { row: newRow, col: newCol },
+            value: finalValue
+          }
+          newStructures.set(newCellId, newCell)
+        }
       }
     }
   }
   
-  return newCellData
+  return newStructures
 }
 
 export const moveStructurePosition = (structure: Structure, targetPosition: Position): Structure => {

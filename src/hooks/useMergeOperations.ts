@@ -3,8 +3,6 @@ import { MergedCell, SelectionRange, Structure } from '../types'
 import { getCellKey, getMergedCellKey, getMergedCellContaining, getCellValue } from '../utils/structureUtils'
 
 export const useMergeOperations = (
-  cellData: Map<string, string>,
-  setCellData: React.Dispatch<React.SetStateAction<Map<string, string>>>,
   structures: Map<string, Structure>,
   mergedCells: Map<string, MergedCell>,
   setMergedCells: React.Dispatch<React.SetStateAction<Map<string, MergedCell>>>,
@@ -48,25 +46,9 @@ export const useMergeOperations = (
       return newMerged
     })
 
-    // Update the cell data to store the merged value in the top-left cell
-    setCellData(prev => {
-      const newData = new Map(prev)
-      newData.set(getCellKey(minRow, minCol), mergedValue)
-      
-      // Clear other cells in the merged range
-      for (let r = minRow; r <= maxRow; r++) {
-        for (let c = minCol; c <= maxCol; c++) {
-          if (!(r === minRow && c === minCol)) {
-            newData.delete(getCellKey(r, c))
-          }
-        }
-      }
-      return newData
-    })
-
     setContextMenu(null)
     setSelectedRange(null)
-  }, [selectedRange, cellData, setCellData, setMergedCells, setContextMenu, setSelectedRange])
+  }, [selectedRange, structures, setMergedCells, setContextMenu, setSelectedRange])
 
   // Unmerge cells
   const unmergeCells = React.useCallback(() => {

@@ -25,8 +25,6 @@ export const App: React.FC = () => {
   )
   
   const { mergeCells, unmergeCells, canMergeCells, canUnmergeCells } = useMergeOperations(
-    state.cellData,
-    state.setCellData,
     state.structures,
     state.mergedCells,
     state.setMergedCells,
@@ -41,7 +39,8 @@ export const App: React.FC = () => {
     updateTableHeaders, 
     getStructureAtPositionSafe,
     updateStructureName,
-    rotateArray
+    rotateArray,
+    deleteStructure
   } = useStructureOperations(
     state.structures,
     state.setStructures,
@@ -65,7 +64,6 @@ export const App: React.FC = () => {
         <div className="flex-1 bg-gray-50 p-4 min-w-0">
           <div className="h-full bg-white border border-gray-300 rounded-lg shadow-lg">
             <SpreadsheetGrid
-              cellData={state.cellData}
               structures={state.structures}
               mergedCells={state.mergedCells}
               selectedCell={state.selectedCell}
@@ -106,7 +104,6 @@ export const App: React.FC = () => {
               setStructureResizeStartDimensions={state.setStructureResizeStartDimensions}
               setStructureResizeStartX={state.setStructureResizeStartX}
               setStructureResizeStartY={state.setStructureResizeStartY}
-              setCellData={state.setCellData}
               setStructures={state.setStructures}
               setSelectedCell={state.setSelectedCell}
               setSelectedRange={state.setSelectedRange}
@@ -138,6 +135,7 @@ export const App: React.FC = () => {
               setShowConflictDialog={state.setShowConflictDialog}
               setConflictDialogData={state.setConflictDialogData}
               onCellUpdate={updateCell}
+              onDeleteStructure={deleteStructure}
               containerRef={containerRef}
             />
           </div>
@@ -212,24 +210,22 @@ export const App: React.FC = () => {
             // Handle keeping existing values
             if (state.conflictDialogData && state.draggedStructure) {
               // Move structure with existing values taking priority
-              const newCellData = moveStructureCells(
+              const newStructures = moveStructureCells(
                 state.draggedStructure, 
                 state.conflictDialogData.targetPosition, 
-                state.cellData, 
+                state.structures, 
                 false // Don't overwrite existing
               )
-              state.setCellData(newCellData)
               
               // Update structure position
               const updatedStructure = moveStructurePosition(
                 state.draggedStructure, 
                 state.conflictDialogData.targetPosition
               )
-              state.setStructures(prev => {
-                const newStructures = new Map(prev)
-                newStructures.set(updatedStructure.id, updatedStructure)
-                return newStructures
-              })
+              const finalStructures = new Map(newStructures)
+              finalStructures.set(updatedStructure.id, updatedStructure)
+              
+              state.setStructures(finalStructures)
               
               // Update selected structure
               state.setSelectedStructure(updatedStructure)
@@ -247,24 +243,22 @@ export const App: React.FC = () => {
             // Handle replacing with new values
             if (state.conflictDialogData && state.draggedStructure) {
               // Move structure with new values taking priority
-              const newCellData = moveStructureCells(
+              const newStructures = moveStructureCells(
                 state.draggedStructure, 
                 state.conflictDialogData.targetPosition, 
-                state.cellData, 
+                state.structures, 
                 true // Overwrite existing
               )
-              state.setCellData(newCellData)
               
               // Update structure position
               const updatedStructure = moveStructurePosition(
                 state.draggedStructure, 
                 state.conflictDialogData.targetPosition
               )
-              state.setStructures(prev => {
-                const newStructures = new Map(prev)
-                newStructures.set(updatedStructure.id, updatedStructure)
-                return newStructures
-              })
+              const finalStructures = new Map(newStructures)
+              finalStructures.set(updatedStructure.id, updatedStructure)
+              
+              state.setStructures(finalStructures)
               
               // Update selected structure
               state.setSelectedStructure(updatedStructure)

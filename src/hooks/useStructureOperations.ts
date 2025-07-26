@@ -270,12 +270,29 @@ export const useStructureOperations = (
     })
   }, [setStructures, setSelectedStructure])
 
+  const deleteStructure = React.useCallback((structureId: string) => {
+    setStructures(prev => {
+      const newStructures = new Map(prev)
+      newStructures.delete(structureId)
+      return newStructures
+    })
+    
+    // Clear selected structure if it was the deleted one
+    setSelectedStructure(current => {
+      if (current && current.id === structureId) {
+        return null
+      }
+      return current
+    })
+  }, [setStructures, setSelectedStructure])
+
   return {
     createStructure,
     createStructureFromToolbar,
     updateTableHeaders,
     getStructureAtPositionSafe,
     updateStructureName,
-    rotateArray
+    rotateArray,
+    deleteStructure
   }
 }
