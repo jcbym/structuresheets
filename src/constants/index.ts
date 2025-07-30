@@ -44,3 +44,20 @@ export const generateColumnLetters = (): string[] => {
 }
 
 export const COLUMN_LETTERS = generateColumnLetters()
+
+export const CELL_COLOR = {
+  BORDER: 'border-gray-400',
+  TAB: 'bg-gray-400'
+}
+
+export const TABLE_COLOR = {
+  BORDER: 'border-green-600',
+  BACKGROUND: 'bg-green-50',
+  TAB: 'bg-green-600'
+}
+
+export const ARRAY_COLOR = {
+  BORDER: 'border-blue-600',
+  BACKGROUND: 'bg-blue-50',
+  TAB: 'bg-blue-600'
+}

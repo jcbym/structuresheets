@@ -1,11 +1,9 @@
 import React from 'react'
-import { Position, Structure, MergedCell, SelectionRange, ResizeType } from '../types'
+import { Position, Structure, SelectionRange, ResizeType } from '../types'
 
 export const useSpreadsheetState = () => {
   // Individual state hooks for better granular control
   const [structures, setStructures] = React.useState<Map<string, Structure>>(new Map())
-  const [mergedCells, setMergedCells] = React.useState<Map<string, MergedCell>>(new Map())
-  const [selectedCell, setSelectedCell] = React.useState<{row: number, col: number} | null>(null)
   const [selectedRange, setSelectedRange] = React.useState<SelectionRange | null>(null)
   const [selectedStructure, setSelectedStructure] = React.useState<Structure | null>(null)
   const [selectedColumn, setSelectedColumn] = React.useState<{tableId: string, columnIndex: number} | null>(null)
@@ -49,8 +47,6 @@ export const useSpreadsheetState = () => {
   return {
     // State values
     structures,
-    mergedCells,
-    selectedCell,
     selectedRange,
     selectedStructure,
     selectedColumn,
@@ -90,8 +86,6 @@ export const useSpreadsheetState = () => {
 
     // State setters
     setStructures,
-    setMergedCells,
-    setSelectedCell,
     setSelectedRange,
     setSelectedStructure,
     setSelectedColumn,

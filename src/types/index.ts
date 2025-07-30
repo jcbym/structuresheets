@@ -67,23 +67,16 @@ export type ContextMenuProps = {
   x: number
   y: number
   onClose: () => void
-  onMergeCells: () => void
-  onUnmergeCells: () => void
-  selectedCell: {row: number, col: number} | null
   selectedRange: SelectionRange | null
   selectedStructure: Structure | null
   setContextMenu: React.Dispatch<React.SetStateAction<{x: number, y: number} | null>>
-  getStructureAtPositionSafe: (row: number, col: number) => Structure | undefined
   updateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
   createStructureFromToolbar: (type: Structure['type']) => void
   rotateArray: (arrayId: string) => void
-  canMerge: boolean
-  canUnmerge: boolean
   canCreateStructures: boolean
 }
 
 export type ToolbarProps = {
-  selectedCell: {row: number, col: number} | null
   selectedRange: {start: Position, end: Position} | null
   onCreateStructure: (type: Structure['type']) => void
 }

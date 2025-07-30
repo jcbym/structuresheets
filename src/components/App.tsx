@@ -6,7 +6,6 @@ import { ContextMenu } from './ui/ContextMenu'
 import { ConflictDialog } from './ui/ConflictDialog'
 import { useSpreadsheetState } from '../hooks/useSpreadsheetState'
 import { useCellOperations } from '../hooks/useCellOperations'
-import { useMergeOperations } from '../hooks/useMergeOperations'
 import { useStructureOperations } from '../hooks/useStructureOperations'
 import { moveStructureCells, moveStructurePosition } from '../utils/structureUtils'
 
@@ -19,32 +18,18 @@ export const App: React.FC = () => {
   // Use custom hooks for operations
   const { updateCell } = useCellOperations(
     state.structures, 
-    state.setStructures, 
-    state.mergedCells, 
-    state.setMergedCells
-  )
-  
-  const { mergeCells, unmergeCells, canMergeCells, canUnmergeCells } = useMergeOperations(
-    state.structures,
-    state.mergedCells,
-    state.setMergedCells,
-    state.selectedRange,
-    state.selectedCell,
-    state.setSelectedRange,
-    state.setContextMenu
+    state.setStructures
   )
   
   const { 
     createStructureFromToolbar, 
-    updateTableHeaders, 
-    getStructureAtPositionSafe,
+    updateTableHeaders,
     updateStructureName,
     rotateArray,
     deleteStructure
   } = useStructureOperations(
     state.structures,
     state.setStructures,
-    state.selectedCell,
     state.selectedRange,
     state.setSelectedStructure
   )
@@ -54,7 +39,6 @@ export const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen">
       <Toolbar
-        selectedCell={state.selectedCell}
         selectedRange={state.selectedRange}
         onCreateStructure={createStructureFromToolbar}
       />
@@ -65,8 +49,6 @@ export const App: React.FC = () => {
           <div className="h-full bg-white border border-gray-300 rounded-lg shadow-lg">
             <SpreadsheetGrid
               structures={state.structures}
-              mergedCells={state.mergedCells}
-              selectedCell={state.selectedCell}
               selectedRange={state.selectedRange}
               selectedStructure={state.selectedStructure}
               selectedColumn={state.selectedColumn}
@@ -105,7 +87,6 @@ export const App: React.FC = () => {
               setStructureResizeStartX={state.setStructureResizeStartX}
               setStructureResizeStartY={state.setStructureResizeStartY}
               setStructures={state.setStructures}
-              setSelectedCell={state.setSelectedCell}
               setSelectedRange={state.setSelectedRange}
               setSelectedStructure={state.setSelectedStructure}
               setSelectedColumn={state.setSelectedColumn}
@@ -182,19 +163,13 @@ export const App: React.FC = () => {
           x={state.contextMenu.x}
           y={state.contextMenu.y}
           onClose={() => state.setContextMenu(null)}
-          onMergeCells={mergeCells}
-          onUnmergeCells={unmergeCells}
-          selectedCell={state.selectedCell}
           selectedRange={state.selectedRange}
           selectedStructure={state.selectedStructure}
           setContextMenu={state.setContextMenu}
-          getStructureAtPositionSafe={getStructureAtPositionSafe}
           updateTableHeaders={updateTableHeaders}
           createStructureFromToolbar={createStructureFromToolbar}
           rotateArray={rotateArray}
-          canMerge={canMergeCells()}
-          canUnmerge={canUnmergeCells()}
-          canCreateStructures={state.selectedCell !== null || state.selectedRange !== null}
+          canCreateStructures={state.selectedRange !== null}
         />
       )}
 

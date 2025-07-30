@@ -63,10 +63,18 @@ export const getStructureAtPosition = (row: number, col: number, structures: Map
 }
 
 export const getDimensions = (structure: Structure): Dimensions => {
+  // For all structures, calculate dimensions from positions
   const { startPosition, endPosition } = structure
   return {
     rows: endPosition.row - startPosition.row + 1,
     cols: endPosition.col - startPosition.col + 1
+  }
+}
+
+export const positionsToDimensions = (start: Position, end: Position): Dimensions => {
+  return {
+    rows: end.row - start.row + 1,
+    cols: end.col - start.col + 1
   }
 }
 

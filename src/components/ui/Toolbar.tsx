@@ -1,8 +1,7 @@
 import React from 'react'
 import { ToolbarProps } from '../../types'
 
-export const Toolbar: React.FC<ToolbarProps> = ({ 
-  selectedCell, 
+export const Toolbar: React.FC<ToolbarProps> = ({
   selectedRange, 
   onCreateStructure 
 }) => {
@@ -15,14 +14,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       const rows = maxRow - minRow + 1
       const cols = maxCol - minCol + 1
       return { rows, cols, isRange: true }
-    } else if (selectedCell) {
-      return { rows: 1, cols: 1, isRange: false }
     }
     return null
   }
 
   const selectionInfo = getSelectionInfo()
-  const hasSelection = selectedCell || selectedRange
+  const hasSelection = selectedRange
 
   return (
     <div className="bg-white border-b border-gray-300 p-2 flex items-center gap-2">

@@ -4,19 +4,13 @@ import { ContextMenuProps } from '../../types'
 export const ContextMenu: React.FC<ContextMenuProps> = ({ 
   x, 
   y, 
-  onClose, 
-  onMergeCells, 
-  onUnmergeCells, 
-  selectedCell,
+  onClose,
   selectedRange,
   selectedStructure,
   setContextMenu,
-  getStructureAtPositionSafe,
   updateTableHeaders,
   createStructureFromToolbar,
   rotateArray,
-  canMerge, 
-  canUnmerge, 
   canCreateStructures
 }) => {
   const menuRef = React.useRef<HTMLDivElement>(null)
@@ -104,12 +98,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   const renderMultipleCellsMenu = () => (
     <>
-      <MenuButton onClick={onMergeCells} enabled={canMerge}>
-        Merge Cells
-      </MenuButton>
-      <MenuButton onClick={onUnmergeCells} enabled={canUnmerge}>
-        Unmerge Cells
-      </MenuButton>
       <hr className="my-1 border-gray-200" />
       <MenuButton onClick={handleCreateArray} enabled={canCreateStructures}>
         Create Array

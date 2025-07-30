@@ -1,5 +1,5 @@
 import React from 'react'
-import { Structure, MergedCell, Position, StructureArray, Table } from '../../types'
+import { Structure, Position, StructureArray, Table } from '../../types'
 import { 
   calculateVisibleCols, 
   calculateVisibleRows, 
@@ -12,8 +12,6 @@ import {
   getNextCell
 } from '../../utils/sheetUtils'
 import {
-  shouldRenderCell, 
-  getMergedCellContaining,
   getDimensions,
   isCellInRange,
   isTableHeader,
@@ -25,13 +23,11 @@ import {
   moveStructurePosition,
   getCellValue
 } from '../../utils/structureUtils'
-import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE, MAX_ROWS } from '../../constants'
+import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE, MAX_ROWS, CELL_COLOR, TABLE_COLOR, ARRAY_COLOR } from '../../constants'
 
 interface SpreadsheetGridProps {
   // State
   structures: Map<string, Structure>
-  mergedCells: Map<string, MergedCell>
-  selectedCell: {row: number, col: number} | null
   selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null
   selectedStructure: Structure | null
   selectedColumn: {tableId: string, columnIndex: number} | null
@@ -70,7 +66,6 @@ interface SpreadsheetGridProps {
   
   // State setters
   setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>
-  setSelectedCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
   setSelectedRange: React.Dispatch<React.SetStateAction<{start: {row: number, col: number}, end: {row: number, col: number}} | null>>
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
   setSelectedColumn: React.Dispatch<React.SetStateAction<{tableId: string, columnIndex: number} | null>>
@@ -118,8 +113,6 @@ interface SpreadsheetGridProps {
 
 export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   structures,
-  mergedCells,
-  selectedCell,
   selectedRange,
   selectedStructure,
   selectedColumn,
@@ -158,7 +151,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setStructureResizeStartX,
   setStructureResizeStartY,
   setStructures,
-  setSelectedCell,
   setSelectedRange,
   setSelectedStructure,
   setSelectedColumn,
@@ -246,26 +238,34 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return isInHeaderRows || isInHeaderCols
   }
 
-  const getCellClasses = (row: number, col: number, structure?: Structure, isMergedCell?: boolean): string => {
+  const getCellClasses = (row: number, col: number, structure?: Structure): string => {
     let classes = 'w-full h-full px-2 py-1 cursor-cell flex items-center'
     
     if (structure && isHeaderCell(row, col, structure)) {
       classes += ' font-bold'
     }
     
-    // Center text in merged cells
-    if (isMergedCell) {
-      classes += ' justify-center'
+    // Center content for resized cells (merged cells)
+    if (structure && structure.type === 'cell') {
+      const { startPosition, endPosition } = structure
+      const rows = endPosition.row - startPosition.row + 1
+      const cols = endPosition.col - startPosition.col + 1
+      if (rows > 1 || cols > 1) {
+        classes += ' justify-center text-center'
+      }
     }
     
     return classes
   }
 
-  const getCellStyle = (row: number, col: number, structure?: Structure): React.CSSProperties => {
+  const getCellStyle = (row: number, col: number, structure?: Structure, isInRange?: boolean): React.CSSProperties => {
     const baseStyle: React.CSSProperties = { 
       width: '100%', 
-      height: '100%',
+      height: '100%'
     }
+    
+    // Default background
+    baseStyle.backgroundColor = '#F3F4F6'
     
     if (structure && isHeaderCell(row, col, structure) && structure.type === 'table') {
       // Use green background to match table border color
@@ -280,15 +280,17 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     if (structure?.type === 'array') {
       return { ...baseStyle, backgroundColor: 'rgba(43, 127, 255, 0.1)' } // Transparent light blue
     }
+
+    if (structure?.type === 'cell') {
+      return { ...baseStyle, backgroundColor: 'rgba(255, 255, 255, 1)' }
+    }
+
+    // If cell is in selected range, use blue background
+    if (isInRange) {
+      return { ...baseStyle, backgroundColor: '#dbeafe' } // bg-blue-100 equivalent
+    }
     
     return baseStyle
-  }
-
-  const getDisplay = (isSelected: boolean): string => {
-    if (isSelected) {
-      return 'bg-blue-100' // Selection border
-    }
-    return 'border-none' // No border for array/table cells (they get overlay borders)
   }
 
   const handleCellBlur = (row: number, col: number, e?: React.FocusEvent<HTMLInputElement>) => {
@@ -383,10 +385,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }
 
-  // Selecting a structure should also clear selected cell, text editing, and range
+  // Selecting a structure should also clear text editing and range
   const selectStructure = (structure: Structure) => {
     setSelectedStructure(structure)
-    setSelectedCell(null)
     setStartEditing(null)
     setSelectedRange(null)
     setEditingCells(new Set())
@@ -428,9 +429,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   // Begin editing when startEditing is set
   React.useEffect(() => {
-    if (startEditing && selectedCell && 
-        startEditing.row === selectedCell.row && 
-        startEditing.col === selectedCell.col) {
+    if (startEditing) {
       const cellKey = getCellKey(startEditing.row, startEditing.col)
       setEditingCells(prev => {
         const newSet = new Set(prev)
@@ -439,24 +438,23 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       })
       setStartEditing(null)
     }
-  }, [startEditing, selectedCell, setStartEditing])
+  }, [startEditing, setStartEditing])
 
   const renderCellContent = (
     row: number, 
     col: number, 
     value: string, 
     isSelected: boolean, 
-    structure?: Structure, 
-    isMergedCell?: boolean
+    structure?: Structure,
+    isInRange?: boolean
   ) => {
     const cellKey = getCellKey(row, col)
     const isEditing = editingCells.has(cellKey)
-    // Use cellValues if it exists (even if empty string), otherwise fall back to value
     const cellValue = cellValues.has(cellKey) ? cellValues.get(cellKey)! : value
 
     return (
       <div 
-        className={`w-full h-full relative ${getDisplay(isSelected)}`}
+        className={`w-full h-full relative`}
         onMouseEnter={() => handleMouseEnter(row, col)}
         onMouseUp={handleMouseUp}
         onContextMenu={(e) => handleRightClick(row, col, e)}
@@ -479,14 +477,18 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             onBlur={(e) => handleCellBlur(row, col, e)}
             onFocus={() => handleCellFocusChange(row, col)}
             onKeyDown={(e) => handleCellKeyDown(e, row, col)}
-            className="w-full h-full outline-none px-2 py-1 bg-transparent"
-            style={{ minWidth: '80px', minHeight: '30px' }}
+            className="w-full h-full outline-none px-2 py-1"
+            style={{ 
+              minWidth: '80px', 
+              minHeight: '30px',
+              backgroundColor: isInRange ? '#dbeafe' : 'transparent'
+            }}
             autoFocus
           />
         ) : (
           <div 
-            className={getCellClasses(row, col, structure, isMergedCell)}
-            style={getCellStyle(row, col, structure)}
+            className={getCellClasses(row, col, structure)}
+            style={getCellStyle(row, col, structure, isInRange)}
             title={structure?.name ? `${structure.type}: ${structure.name}` : undefined}
           >
             {cellValue || '\u00A0'}
@@ -550,21 +552,20 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   }
 
   const handleCellFocus = (row: number, col: number) => {
-    setSelectedCell({ row, col })
+    setSelectedRange({ start: { row, col }, end: { row, col } })
   }
 
   const handleCellEnterPress = (row: number, col: number) => {
     const nextRow = row + 1
     if (nextRow < MAX_ROWS) {
-      setSelectedRange(null)
-      setSelectedCell({ row: nextRow, col })
+      setSelectedRange({ start: { row: nextRow, col }, end: { row: nextRow, col } })
       setStartEditing({ row: nextRow, col })
     }
   }
 
   const handleArrowKeyNavigation = (row: number, col: number, direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const { row: newRow, col: newCol } = getNextCell(row, col, direction)
-    setSelectedCell({ row: newRow, col: newCol })
+    setSelectedRange({ start: { row: newRow, col: newCol }, end: { row: newRow, col: newCol } })
     setStartEditing({ row: newRow, col: newCol })
   }
 
@@ -603,13 +604,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       // Click on empty cell - clear all selections and select cell normally
       setSelectedStructure(null)
       setSelectedColumn(null) // Clear column selection when clicking outside tables
-      setSelectedCell({ row, col })
+      setSelectedRange({ start: { row, col }, end: { row, col } })
       setStartEditing({ row, col }) // Start editing immediately for non-structure cells
       
       e.preventDefault()
       setIsDragging(true)
       setDragStart({ row, col })
-      setSelectedRange(null)
     }
   }
 
@@ -652,13 +652,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       
       if (isSameColumnSelected) {
         // Second click on already selected column - start editing the cell
-        setSelectedCell({ row, col })
+        setSelectedRange({ start: { row, col }, end: { row, col } })
         setStartEditing({ row, col })
       } else {
         // First click on column - select the column and table
         setSelectedColumn({ tableId: table.id, columnIndex })
         selectStructure(table)
-        setSelectedCell(null)
         setSelectedRange(null)
       }
     }
@@ -686,7 +685,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         // First select the column
         setSelectedColumn({ tableId: table.id, columnIndex })
         selectStructure(table)
-        setSelectedCell(null)
         setSelectedRange(null)
       }
       
@@ -705,20 +703,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         const headerLevel = getHeaderLevel(row, table)
         
         if (headerLevel >= 0) {
-          // Check if this cell is part of a merged cell
-          const mergedCell = mergedCells.get(`${row}-${col}`) || 
-            Array.from(mergedCells.values()).find(mc => 
-              row >= mc.startRow && row <= mc.endRow && 
-              col >= mc.startCol && col <= mc.endCol
-            )
-          let rightmostCol = col
-          
-          if (mergedCell) {
-            rightmostCol = mergedCell.endCol
-          }
-          
           // Show button to the right of the rightmost cell
-          setHoveredHeaderCell({ row, col: rightmostCol + 1 })
+          setHoveredHeaderCell({ row, col: col + 1 })
           setShowAddColumnButton(true)
         }
       }
@@ -1128,8 +1114,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     e.preventDefault()
     e.stopPropagation()
     
-    if (!selectedStructure || selectedStructure.type === 'cell' || selectedStructure.type === 'column') {
-      return // Only allow resizing for arrays and tables
+    if (!selectedStructure || selectedStructure.type === 'column') {
+      return // Only allow resizing for arrays, tables, and cells
     }
 
     setIsResizingStructure(true)
@@ -1140,59 +1126,99 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setStructureResizeStartY(e.clientY)
     
     // Store the current dimensions
-    if ('dimensions' in selectedStructure) {
-      setStructureResizeStartDimensions(getDimensions(selectedStructure))
-    }
+    setStructureResizeStartDimensions(getDimensions(selectedStructure))
   }
 
   // Global keydown event handler for column header editing
   React.useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      // Check if a column is selected and a printable character is typed
-      if (selectedColumn && !isDraggingColumn && !isResizingSheetHeader && !isResizingStructure) {
-        // Check if the key is a printable character (not arrow keys, function keys, etc.)
+      // 1. Handle merged cell creation by typing on a selected range
+      if (
+        selectedRange &&
+        selectedRange.start && selectedRange.end &&
+        !isDraggingColumn && !isResizingSheetHeader && !isResizingStructure && !isDraggingStructure
+      ) {
         const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
-        
         if (isPrintableChar) {
-          // Find the table and get the header cell position
-          const table = structures.get(selectedColumn.tableId)
-          if (table && table.type === 'table') {
-            const tableStructure = table as any
-            const headerRow = tableStructure.startPosition.row
-            const headerCol = tableStructure.startPosition.col + selectedColumn.columnIndex
-            
-            // Start editing the header cell with the typed character
-            const cellKey = getCellKey(headerRow, headerCol)
-            
-            // Select the header cell first
-            setSelectedCell({ row: headerRow, col: headerCol })
-            
-            // Start editing the cell
+          // Calculate range bounds
+          const minRow = Math.min(selectedRange.start.row, selectedRange.end.row)
+          const maxRow = Math.max(selectedRange.start.row, selectedRange.end.row)
+          const minCol = Math.min(selectedRange.start.col, selectedRange.end.col)
+          const maxCol = Math.max(selectedRange.start.col, selectedRange.end.col)
+          // Only create merged cell if range is more than 1 cell
+          if (minRow !== maxRow || minCol !== maxCol) {
+            // Create a new merged cell structure (type as 'cell' literal)
+            const mergedCellId = `cell-${minRow}-${minCol}-${maxRow}-${maxCol}-${Date.now()}`
+            const centerRow = Math.floor((minRow + maxRow) / 2)
+            const centerCol = Math.floor((minCol + maxCol) / 2)
+            const newMergedCell = {
+              type: 'cell' as const,
+              id: mergedCellId,
+              startPosition: { row: minRow, col: minCol },
+              endPosition: { row: maxRow, col: maxCol },
+              value: e.key
+            }
+            setStructures(prev => {
+              const newStructures = new Map(prev)
+              newStructures.set(mergedCellId, newMergedCell)
+              return newStructures
+            })
+            // Select the center cell and start editing
+            setSelectedRange({ start: { row: centerRow, col: centerCol }, end: { row: centerRow, col: centerCol } })
+            const cellKey = getCellKey(centerRow, centerCol)
             setEditingCells(prev => {
               const newSet = new Set(prev)
               newSet.add(cellKey)
               return newSet
             })
-            
-            // Use setTimeout to ensure the input field is rendered and then set it up
             setTimeout(() => {
               const inputElement = document.querySelector(`input[data-cell-key="${cellKey}"]`) as HTMLInputElement
               if (inputElement) {
-                // Clear the input and set to the typed character
                 inputElement.value = e.key
                 inputElement.focus()
-                inputElement.setSelectionRange(1, 1) // Position cursor after the typed character
-                
-                // Also update the React state to match
+                inputElement.setSelectionRange(1, 1)
                 setCellValues(prev => {
                   const newMap = new Map(prev)
                   newMap.set(cellKey, e.key)
                   return newMap
                 })
               }
-            }, 10) // Slightly longer timeout to ensure rendering is complete
-            
-            // Prevent the default action
+            }, 10)
+            e.preventDefault()
+            return
+          }
+        }
+      }
+
+      // 2. Column header editing (original logic)
+      if (selectedColumn && !isDraggingColumn && !isResizingSheetHeader && !isResizingStructure) {
+        const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
+        if (isPrintableChar) {
+          const table = structures.get(selectedColumn.tableId)
+          if (table && table.type === 'table') {
+            const tableStructure = table as any
+            const headerRow = tableStructure.startPosition.row
+            const headerCol = tableStructure.startPosition.col + selectedColumn.columnIndex
+            const cellKey = getCellKey(headerRow, headerCol)
+            setSelectedRange({ start: { row: headerRow, col: headerCol }, end: { row: headerRow, col: headerCol } })
+            setEditingCells(prev => {
+              const newSet = new Set(prev)
+              newSet.add(cellKey)
+              return newSet
+            })
+            setTimeout(() => {
+              const inputElement = document.querySelector(`input[data-cell-key="${cellKey}"]`) as HTMLInputElement
+              if (inputElement) {
+                inputElement.value = e.key
+                inputElement.focus()
+                inputElement.setSelectionRange(1, 1)
+                setCellValues(prev => {
+                  const newMap = new Map(prev)
+                  newMap.set(cellKey, e.key)
+                  return newMap
+                })
+              }
+            }, 10)
             e.preventDefault()
           }
         }
@@ -1200,11 +1226,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
 
     document.addEventListener('keydown', handleGlobalKeyDown)
-    
     return () => {
       document.removeEventListener('keydown', handleGlobalKeyDown)
     }
-  }, [selectedColumn, isDraggingColumn, isResizingSheetHeader, isResizingStructure, structures, setCellValues, setEditingCells, setSelectedCell])
+  }, [selectedRange, selectedColumn, isDraggingColumn, isResizingSheetHeader, isResizingStructure, isDraggingStructure, editingCells, structures, setCellValues, setEditingCells, setSelectedRange, setStructures])
 
   // Global keydown event handler for Enter and Backspace behaviors
   React.useEffect(() => {
@@ -1228,7 +1253,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return () => {
       document.removeEventListener('keydown', handleGlobalKeyDown)
     }
-  }, [selectedCell, selectedStructure, editingCells, isDraggingColumn, isResizingSheetHeader, isResizingStructure, isDraggingStructure, structures, onDeleteStructure])
+  }, [selectedRange, selectedStructure, editingCells, isDraggingColumn, isResizingSheetHeader, isResizingStructure, isDraggingStructure, structures, onDeleteStructure])
 
   // Global mouse event handlers for resizing and dragging
   React.useEffect(() => {
@@ -1481,7 +1506,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
       // Handle structure resizing
       if (isResizingStructure && structureResizeDirection && selectedStructure && containerRef.current) {
-        if (selectedStructure.type !== 'table' && selectedStructure.type !== 'array') return
+        if (selectedStructure.type !== 'table' && selectedStructure.type !== 'array' && selectedStructure.type !== 'cell') return
 
         const containerRect = containerRef.current.getBoundingClientRect()
         const relativeX = e.clientX - containerRect.left + scrollLeft
@@ -1646,6 +1671,28 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             
             // Update selected structure
             selectStructure(updatedStructure)
+          } else if (selectedStructure.type === 'cell') {
+            // Handle cell resizing - cells can resize in both directions
+            const finalRows = newEndPosition.row - newStartPosition.row + 1
+            const finalCols = newEndPosition.col - newStartPosition.col + 1
+            
+            // Create updated cell structure
+            const updatedStructure = {
+              ...selectedStructure,
+              startPosition: newStartPosition,
+              endPosition: newEndPosition,
+              dimensions: { rows: finalRows, cols: finalCols }
+            }
+            
+            // Update structures map
+            setStructures(prev => {
+              const newStructures = new Map(prev)
+              newStructures.set(selectedStructure.id, updatedStructure)
+              return newStructures
+            })
+            
+            // Update selected structure
+            selectStructure(updatedStructure)
           }
         }
       }
@@ -1710,47 +1757,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setColumnDropTarget,
   ])
 
-  // Render merged cell overlays
-  const renderMergedCellOverlays = () => {
-    const overlays = []
-
-    for (const [key, mergedCell] of mergedCells) {
-      if (mergedCell.endRow >= startRow && mergedCell.startRow < endRow &&
-          mergedCell.endCol >= startCol && mergedCell.startCol < endCol) {
-        
-        const overlayLeft = getColumnPosition(mergedCell.startCol, columnWidths)
-        const overlayTop = getRowPosition(mergedCell.startRow, rowHeights)
-        
-        let overlayWidth = 0
-        for (let c = mergedCell.startCol; c <= mergedCell.endCol; c++) {
-          overlayWidth += getColumnWidth(c, columnWidths)
-        }
-        
-        let overlayHeight = 0
-        for (let r = mergedCell.startRow; r <= mergedCell.endRow; r++) {
-          overlayHeight += getRowHeight(r, rowHeights)
-        }
-
-        overlays.push(
-          <div
-            key={`merged-overlay-${key}`}
-            className="absolute pointer-events-none border-1 border-gray-500"
-            style={{
-              left: overlayLeft,
-              top: overlayTop,
-              width: overlayWidth,
-              height: overlayHeight,
-              zIndex: Z_INDEX.MERGED_CELL
-            }}
-            title={`Merged cell: ${mergedCell.value}`}
-          />
-        )
-      }
-    }
-
-    return overlays
-  }
-
   // Render structure overlays
   const renderStructureOverlays = () => {
     const overlays = []
@@ -1760,7 +1766,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       if (processedStructures.has(key)) continue
 
       let startPosition, endPosition
-      if (structure.type === 'cell' || structure.type === 'column') {
+      if (structure.type === 'column') {
         startPosition = endPosition = structure.startPosition
       } else {
         startPosition = structure.startPosition
@@ -1787,9 +1793,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         const isSelected = selectedStructure && selectedStructure.id === structure.id
 
         // Use subtle gray borders that integrate with the grid
-        const borderColor = structure.type === 'cell' ? 'border-gray-500' :
-                           structure.type === 'array' ? 'border-blue-500' : 'border-green-600'
-        const borderWidth = isSelected ? 'border-3' : structure.type === 'cell' ? 'border' : 'border-2'
+        const borderColor = structure.type === 'cell' ? CELL_COLOR.BORDER :
+                           structure.type === 'array' ? ARRAY_COLOR.BORDER : TABLE_COLOR.BORDER
+        const borderWidth = isSelected ? 'border-3' : structure.type === 'cell' ? '' : 'border-2' // Don't give cells borders until they're selected
 
         overlays.push(
           <div
@@ -1836,7 +1842,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setSelectedColumn(null)
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1851,7 +1856,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setDragOffset({ row: 0, col: 0 })
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1877,7 +1881,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setSelectedColumn(null)
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1892,7 +1895,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setDragOffset({ row: endPosition.row - startPosition.row, col: 0 })
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1918,7 +1920,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setSelectedColumn(null)
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1933,7 +1934,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setDragOffset({ row: 0, col: 0 })
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1959,7 +1959,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setSelectedColumn(null)
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1974,7 +1973,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setDragOffset({ row: 0, col: endPosition.col - startPosition.col })
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
-                setSelectedCell(null)
                 setStartEditing(null)
                 setSelectedRange(null)
               }
@@ -1982,8 +1980,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           />
         )
 
-        // Add invisible resize areas for selected structures (arrays and tables only)
-        if (isSelected && (structure.type === 'array' || structure.type === 'table')) {
+        // Add invisible resize areas for selected structures
+        if (isSelected) {
           const edgeWidth = 4 // Width of the draggable edge area
           
           // For arrays, only show resize handles for the direction they can expand
@@ -2345,12 +2343,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       const tabTop = overlayTop - tabHeight
       
       // Choose tab color based on structure type (same for both named and unnamed structures)
-      const tabBgColor = selectedStructure.type === 'cell' ? 'bg-gray-500' :
-                        selectedStructure.type === 'array' ? 'bg-blue-500' : 'bg-green-600'
-      const borderColor = selectedStructure.type === 'cell' ? 'border-gray-500' :
-                         selectedStructure.type === 'array' ? 'border-blue-500' : 'border-green-600'
-      
-      
+      const tabBgColor = selectedStructure.type === 'cell' ? CELL_COLOR.TAB :
+                        selectedStructure.type === 'array' ? ARRAY_COLOR.TAB : TABLE_COLOR.TAB
+      const borderColor = selectedStructure.type === 'cell' ? CELL_COLOR.BORDER :
+                         selectedStructure.type === 'array' ? ARRAY_COLOR.BORDER : TABLE_COLOR.BORDER
+
+
       tabs.push(
         <div
           key={`name-tab-selected-${selectedStructure.id}`}
@@ -2532,6 +2530,27 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return headers
   }
 
+  // Check if a cell position is covered by a resized cell
+  const isCellCoveredByResizedCell = (row: number, col: number): boolean => {
+    for (const [, structure] of structures) {
+      if (structure.type === 'cell') {
+        const { startPosition, endPosition } = structure
+        const rows = endPosition.row - startPosition.row + 1
+        const cols = endPosition.col - startPosition.col + 1
+        if (rows > 1 || cols > 1) {
+          // This is a resized cell
+          if (row >= startPosition.row && row < startPosition.row + rows &&
+              col >= startPosition.col && col < startPosition.col + cols &&
+              !(row === startPosition.row && col === startPosition.col)) {
+            // This position is covered by the resized cell (but not the top-left corner)
+            return true
+          }
+        }
+      }
+    }
+    return false
+  }
+
   // Render visible rows
   const renderRows = () => {
     const rows = []
@@ -2569,40 +2588,48 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
       // Data cells
       for (let colIndex = startCol; colIndex < endCol; colIndex++) {
-        if (!shouldRenderCell(rowIndex, colIndex, mergedCells)) {
+        // Skip cells that are covered by resized cells
+        if (isCellCoveredByResizedCell(rowIndex, colIndex)) {
           continue
         }
 
-        const isSelected = selectedCell?.row === rowIndex && selectedCell?.col === colIndex
+        const isSelected = selectedRange?.start.row === rowIndex && selectedRange?.start.col === colIndex && selectedRange?.end.row === rowIndex && selectedRange?.end.col === colIndex
         const isInRange = isCellInRange(rowIndex, colIndex, selectedRange)
         const structure = getStructureAtPosition(rowIndex, colIndex, structures)
-        const mergedCell = getMergedCellContaining(rowIndex, colIndex, mergedCells)
         
-        // Calculate cell dimensions for merged cells
         let cellWidth = getColumnWidth(colIndex, columnWidths)
         let cellHeight = getRowHeight(rowIndex, rowHeights)
         
-        if (mergedCell) {
-          cellWidth = 0
-          for (let c = mergedCell.startCol; c <= mergedCell.endCol; c++) {
-            cellWidth += getColumnWidth(c, columnWidths)
-          }
-          cellHeight = 0
-          for (let r = mergedCell.startRow; r <= mergedCell.endRow; r++) {
-            cellHeight += getRowHeight(r, rowHeights)
+        // If this is a resized cell, calculate the total width and height
+        if (structure && structure.type === 'cell') {
+          const { startPosition, endPosition } = structure
+          const rows = endPosition.row - startPosition.row + 1
+          const cols = endPosition.col - startPosition.col + 1
+          if ((rows > 1 || cols > 1) && 
+              rowIndex === structure.startPosition.row && 
+              colIndex === structure.startPosition.col) {
+            // This is the top-left corner of a resized cell - calculate total dimensions
+            cellWidth = 0
+            for (let c = 0; c < cols; c++) {
+              cellWidth += getColumnWidth(colIndex + c, columnWidths)
+            }
+            cellHeight = 0
+            for (let r = 0; r < rows; r++) {
+              cellHeight += getRowHeight(rowIndex + r, rowHeights)
+            }
           }
         }
         
         // Add green column borders for tables (but not individual cell selection borders)
         let borderClass = 'border border-gray-200'
         if (structure && structure.type === 'table') {
-          borderClass = 'border-l-1 border-r-1 border-t border-b border-l-green-600 border-r-green-600 border-t-gray-300 border-b-gray-300'
+          borderClass = `border-l-1 border-r-1 border-t border-b ${TABLE_COLOR.BORDER} border-t-gray-200 border-b-gray-200`
         }
 
         cells.push(
           <div
             key={`cell-${rowIndex}-${colIndex}`}
-            className={`${borderClass} ${isInRange ? 'bg-blue-100' : ''} `}
+            className={`${borderClass}`}
             style={{
               position: 'absolute',
               left: getColumnPosition(colIndex, columnWidths),
@@ -2611,9 +2638,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               height: cellHeight,
               minWidth: cellWidth,
               minHeight: cellHeight,
-              zIndex: mergedCell ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
+              zIndex: structure && structure.type === 'cell' && (structure.endPosition.row > structure.startPosition.row || structure.endPosition.col > structure.startPosition.col) ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
             }}
-            onMouseEnter={(e) => {
+            onMouseEnter={() => {
               handleMouseEnter(rowIndex, colIndex)
               if (isTableHeader(rowIndex, colIndex, structures)) {
                 handleHeaderHover(rowIndex, colIndex, true)
@@ -2648,10 +2675,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             {renderCellContent(
               rowIndex,
               colIndex,
-              mergedCell ? mergedCell.value : getCellValue(rowIndex, colIndex, structures),
+              getCellValue(rowIndex, colIndex, structures),
               isSelected,
               structure,
-              !!mergedCell
+              isInRange
             )}
           </div>
         )
@@ -2664,7 +2691,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   // Render add button overlay
   const renderAddButtons = () => {
-    if (!hoveredAddButton) return null
+    if (isResizingStructure || isDraggingStructure || isDraggingColumn || !hoveredAddButton) return null // Disable add buttons during dragging operations
 
     const { type, position, structureId, insertIndex } = hoveredAddButton
     
@@ -2782,9 +2809,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         
         {/* Rows and cells */}
         {renderRows()}
-        
-        {/* Merged cell overlays */}
-        {renderMergedCellOverlays()}
         
         {/* Structure overlays */}
         {renderStructureOverlays()}

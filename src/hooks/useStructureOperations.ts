@@ -1,7 +1,7 @@
 import React from 'react'
 import { Structure, Cell, StructureArray, Position } from '../types'
 import { generateUUID } from '../utils/sheetUtils'
-import { getCellValue, getStructureAtPosition } from '../utils/structureUtils'
+import { getCellValue, getStructureAtPosition, positionsToDimensions } from '../utils/structureUtils'
 import { MAX_ROWS, MAX_COLS } from '../constants'
 
 const createMultipleCells = (
@@ -31,29 +31,27 @@ const createMultipleCells = (
 export const useStructureOperations = (
   structures: Map<string, Structure>,
   setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>,
-  selectedCell: {row: number, col: number} | null,
   selectedRange: {start: Position, end: Position} | null,
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
 ) => {
-  const createStructure = (type: Structure['type'], name: string, position: {row: number, col: number}, dimensions?: {rows: number, cols: number}) => {
+  const createStructure = (type: Structure['type'], name: string, startPosition: Position, endPosition: Position) => {
     let newStructure: Structure
-    let { row, col } = position
 
     switch (type) {
       case 'cell':
         newStructure = {
           type: 'cell',
           id: generateUUID(),
-          startPosition: position,
-          endPosition: position,
+          startPosition: startPosition,
+          endPosition: endPosition,
           name,
-          value: getCellValue(row, col, structures)
+          value: ''
         }
         return newStructure
       
       case 'array':
-        const arrayDims = dimensions || { rows: 1, cols: 1 }
-        const cells = createMultipleCells(row, row + arrayDims.rows - 1, col, col + arrayDims.cols - 1, structures)
+        const arrayDims = positionsToDimensions(startPosition, endPosition)
+        // const cells = createMultipleCells(row, row + arrayDims.rows - 1, col, col + arrayDims.cols - 1, structures)
         let direction: 'horizontal' | 'vertical';
 
         if (arrayDims.cols == 1) {
@@ -68,39 +66,39 @@ export const useStructureOperations = (
         newStructure = {
           type: 'array',
           id: generateUUID(),
-          startPosition: { row, col },
-          endPosition: { row: row + arrayDims.rows - 1, col: col + arrayDims.cols - 1 },
+          startPosition: startPosition,
+          endPosition: endPosition,
           name,
-          cells,
-          size: cells.length,
+          cells: [],
+          size: Math.max(arrayDims.rows, arrayDims.cols),
           direction
         }
         return newStructure
 
       case 'table':
         const arrays: StructureArray[] = []
-        const tableDims = dimensions || { rows: 1, cols: 1 }
+        const tableDims = positionsToDimensions(startPosition, endPosition)
         
-        // Create arrays for the rows
-        for (let r = 0; r < tableDims.rows; r++) {
-          const rowCells = createMultipleCells(row + r, row + r, col, col + tableDims.cols - 1, structures)
+        // // Create arrays for the rows
+        // for (let r = 0; r < tableDims.rows; r++) {
+        //   const rowCells = createMultipleCells(row + r, row + r, col, col + tableDims.cols - 1, structures)
           
-          arrays.push({
-            type: 'array',
-            id: generateUUID(),
-            startPosition: { row: row + r, col },
-            endPosition: { row: row + r, col: col + tableDims.cols - 1 },
-            cells: rowCells,
-            direction: 'horizontal',
-            size: tableDims.cols
-          })
-        }
+        //   arrays.push({
+        //     type: 'array',
+        //     id: generateUUID(),
+        //     startPosition: { row: row + r, col },
+        //     endPosition: { row: row + r, col: col + tableDims.cols - 1 },
+        //     cells: rowCells,
+        //     direction: 'horizontal',
+        //     size: tableDims.cols
+        //   })
+        // }
 
         newStructure = {
           type: 'table',
           id: generateUUID(),
-          startPosition: { row, col },
-          endPosition: { row: row + tableDims.rows - 1, col: col + tableDims.cols - 1 },
+          startPosition: startPosition,
+          endPosition: endPosition,
           name,
           arrays,
           hasHeaderRow: true,
@@ -122,17 +120,11 @@ export const useStructureOperations = (
       endRow = Math.max(selectedRange.start.row, selectedRange.end.row)
       startCol = Math.min(selectedRange.start.col, selectedRange.end.col)
       endCol = Math.max(selectedRange.start.col, selectedRange.end.col)
-    } else if (selectedCell) {
-      // Use single selected cell
-      startRow = endRow = selectedCell.row
-      startCol = endCol = selectedCell.col
     } else {
       return // No selection
     }
-    
-    const dimensions = { rows: endRow - startRow + 1, cols: endCol - startCol + 1 }
 
-    const newStructure = createStructure(type, '', {row: startRow, col: startCol}, dimensions)
+    const newStructure = createStructure(type, '', {row: startRow, col: startCol}, {row: endRow, col: endCol})
 
     if (!newStructure) return // Invalid structure type or dimensions
 
@@ -146,7 +138,7 @@ export const useStructureOperations = (
     
     // Select the newly created structure
     setSelectedStructure(newStructure)
-  }, [selectedRange, selectedCell, structures, setStructures, setSelectedStructure])
+  }, [selectedRange, structures, setStructures, setSelectedStructure])
 
   // Function to update table header settings
   const updateTableHeaders = React.useCallback((row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => {

@@ -7,7 +7,6 @@ export const useMergeOperations = (
   mergedCells: Map<string, MergedCell>,
   setMergedCells: React.Dispatch<React.SetStateAction<Map<string, MergedCell>>>,
   selectedRange: SelectionRange | null,
-  selectedCell: {row: number, col: number} | null,
   setSelectedRange: React.Dispatch<React.SetStateAction<SelectionRange | null>>,
   setContextMenu: React.Dispatch<React.SetStateAction<{x: number, y: number} | null>>
 ) => {
@@ -52,9 +51,11 @@ export const useMergeOperations = (
 
   // Unmerge cells
   const unmergeCells = React.useCallback(() => {
-    if (!selectedCell) return
+    if (!selectedRange) return
+    const minRow = Math.min(selectedRange.start.row, selectedRange.end.row)
+    const minCol = Math.min(selectedRange.start.col, selectedRange.end.col)
 
-    const mergedCell = getMergedCellContaining(selectedCell.row, selectedCell.col, mergedCells)
+    const mergedCell = getMergedCellContaining(minRow, minCol, mergedCells)
     if (!mergedCell) return
 
     // Find and remove the merged cell
@@ -70,7 +71,7 @@ export const useMergeOperations = (
     })
 
     setContextMenu(null)
-  }, [selectedCell, mergedCells, setMergedCells, setContextMenu])
+  }, [mergedCells, setMergedCells, setContextMenu])
 
   // Check if cells can be merged
   const canMergeCells = React.useCallback((): boolean => {
@@ -98,9 +99,11 @@ export const useMergeOperations = (
 
   // Check if cells can be unmerged
   const canUnmergeCells = React.useCallback((): boolean => {
-    if (!selectedCell) return false
-    return getMergedCellContaining(selectedCell.row, selectedCell.col, mergedCells) !== null
-  }, [selectedCell, mergedCells])
+    if (!selectedRange) return false
+    const minRow = Math.min(selectedRange.start.row, selectedRange.end.row)
+    const minCol = Math.min(selectedRange.start.col, selectedRange.end.col)
+    return getMergedCellContaining(minRow, minCol, mergedCells) !== null
+  }, [selectedRange, mergedCells])
 
   return {
     mergeCells,

@@ -1,12 +1,10 @@
 import React from 'react'
-import { Structure, MergedCell, Cell, StructureArray, Table } from '../types'
-import { getCellKey, getCellValue, getMergedCellContaining, getStructureAtPosition } from '../utils/structureUtils'
+import { Structure, Cell, StructureArray, Table } from '../types'
+import { getCellValue, getStructureAtPosition } from '../utils/structureUtils'
 
 export const useCellOperations = (
   structures: Map<string, Structure>,
-  setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>,
-  mergedCells: Map<string, MergedCell>,
-  setMergedCells: React.Dispatch<React.SetStateAction<Map<string, MergedCell>>>
+  setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>
 ) => {
   const updateCell = React.useCallback((row: number, col: number, value: string) => {
     // Check if there's already a structure at this position
@@ -80,22 +78,7 @@ export const useCellOperations = (
         return newStructures
       })
     }
-
-    // Update merged cell value if this cell is part of a merged cell
-    const mergedCell = getMergedCellContaining(row, col, mergedCells)
-    if (mergedCell) {
-      setMergedCells(prev => {
-        const newMerged = new Map(prev)
-        for (const [key, cell] of prev) {
-          if (cell === mergedCell) {
-            newMerged.set(key, { ...cell, value })
-            break
-          }
-        }
-        return newMerged
-      })
-    }
-  }, [structures, setStructures, mergedCells, setMergedCells])
+  }, [structures, setStructures])
 
   const getCellValueSafe = React.useCallback((row: number, col: number): string => {
     return getCellValue(row, col, structures)
