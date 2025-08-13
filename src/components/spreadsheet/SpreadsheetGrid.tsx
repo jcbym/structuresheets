@@ -1,5 +1,5 @@
 import React from 'react'
-import { Structure, Position, StructureArray, Table } from '../../types'
+import { Structure, Position, ArrayStructure, TableStructure, CellStructure, StructureMap, PositionMap } from '../../types'
 import { 
   calculateVisibleCols, 
   calculateVisibleRows, 
@@ -12,22 +12,23 @@ import {
   getNextCell
 } from '../../utils/sheetUtils'
 import {
-  getDimensions,
   isCellInRange,
   isTableHeader,
   getHeaderLevel,
   getStructureAtPosition,
-  getCellsInStructure,
-  detectConflicts,
-  moveStructureCells,
-  moveStructurePosition,
-  getCellValue
+  moveStructure,
+  getCellValue,
+  getEndPosition,
+  removeStructureFromPositionMap,
+  addStructureToPositionMap,
+  isValidMoveTarget
 } from '../../utils/structureUtils'
 import { COLUMN_LETTERS, Z_INDEX, MIN_CELL_SIZE, MAX_ROWS, CELL_COLOR, TABLE_COLOR, ARRAY_COLOR } from '../../constants'
 
 interface SpreadsheetGridProps {
   // State
-  structures: Map<string, Structure>
+  structures: StructureMap
+  positions: PositionMap
   selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null
   selectedStructure: Structure | null
   selectedColumn: {tableId: string, columnIndex: number} | null
@@ -58,14 +59,17 @@ interface SpreadsheetGridProps {
   draggedStructure: Structure | null
   dragOffset: Position | null
   dropTarget: Position | null
+  lastValidDropTarget: Position | null
   showConflictDialog: boolean
   conflictDialogData: {
     targetPosition: Position
     conflictingCells: Array<{row: number, col: number, existingValue: string, newValue: string}>
+    draggedStructure: Structure
   } | null
   
   // State setters
-  setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>
+  setStructures: React.Dispatch<React.SetStateAction<StructureMap>>
+  setPositions: React.Dispatch<React.SetStateAction<PositionMap>>
   setSelectedRange: React.Dispatch<React.SetStateAction<{start: {row: number, col: number}, end: {row: number, col: number}} | null>>
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
   setSelectedColumn: React.Dispatch<React.SetStateAction<{tableId: string, columnIndex: number} | null>>
@@ -97,10 +101,12 @@ interface SpreadsheetGridProps {
   setDraggedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
   setDragOffset: React.Dispatch<React.SetStateAction<Position | null>>
   setDropTarget: React.Dispatch<React.SetStateAction<Position | null>>
+  setLastValidDropTarget: React.Dispatch<React.SetStateAction<Position | null>>
   setShowConflictDialog: React.Dispatch<React.SetStateAction<boolean>>
   setConflictDialogData: React.Dispatch<React.SetStateAction<{
     targetPosition: Position
     conflictingCells: Array<{row: number, col: number, existingValue: string, newValue: string}>
+    draggedStructure: Structure
   } | null>>
   
   // Event handlers
@@ -113,6 +119,7 @@ interface SpreadsheetGridProps {
 
 export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   structures,
+  positions,
   selectedRange,
   selectedStructure,
   selectedColumn,
@@ -143,14 +150,16 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   draggedStructure,
   dragOffset,
   dropTarget,
+  lastValidDropTarget,
   showConflictDialog,
-  conflictDialogData,
+  conflictDialogData: _conflictDialogData,
   setIsResizingStructure,
   setStructureResizeDirection,
   setStructureResizeStartDimensions,
   setStructureResizeStartX,
   setStructureResizeStartY,
   setStructures,
+  setPositions,
   setSelectedRange,
   setSelectedStructure,
   setSelectedColumn,
@@ -177,6 +186,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setDraggedStructure,
   setDragOffset,
   setDropTarget,
+  setLastValidDropTarget,
   setShowConflictDialog,
   setConflictDialogData,
   onCellUpdate,
@@ -220,18 +230,18 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const isHeaderCell = (row: number, col: number, structure?: Structure): boolean => {
     if (!structure || structure.type !== 'table') return false
     
-    const table = structure as any
+    const table = structure as TableStructure
     const { startPosition } = table
-    const headerRows = table.headerRows || 1
-    const headerCols = table.headerCols || 1
+    const headerRows = table.colHeaderLevels || 0
+    const headerCols = table.rowHeaderLevels || 0
     
-    // Check if cell is within header row range
-    const isInHeaderRows = (table.hasHeaderRow === true) && 
+    // Check if cell is within header row range (column headers)
+    const isInHeaderRows = headerRows > 0 && 
       row >= startPosition.row && 
       row < startPosition.row + headerRows
     
-    // Check if cell is within header column range
-    const isInHeaderCols = (table.hasHeaderCol === true) && 
+    // Check if cell is within header column range (row headers)
+    const isInHeaderCols = headerCols > 0 && 
       col >= startPosition.col && 
       col < startPosition.col + headerCols
     
@@ -247,10 +257,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     
     // Center content for resized cells (merged cells)
     if (structure && structure.type === 'cell') {
-      const { startPosition, endPosition } = structure
-      const rows = endPosition.row - startPosition.row + 1
-      const cols = endPosition.col - startPosition.col + 1
-      if (rows > 1 || cols > 1) {
+      const { startPosition, dimensions } = structure
+      if (dimensions.rows > 1 || dimensions.cols > 1) {
         classes += ' justify-center text-center'
       }
     }
@@ -313,7 +321,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
 
     // Check if there's already a structure at this position
-    const existingStructure = getStructureAtPosition(row, col, structures)
+    const existingStructure = getStructureAtPosition(row, col, positions, structures)
     
     // Update logic:
     // - If there's an existing structure: ALWAYS update (allows clearing to empty string)
@@ -393,6 +401,53 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setEditingCells(new Set())
   }
 
+  // Shared function to start structure dragging with precise offset calculation
+  const startStructureDrag = (structure: Structure, e: React.MouseEvent, fallbackRow: number = 0, fallbackCol: number = 0) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setSelectedColumn(null)
+    setIsDraggingStructure(true)
+    setDraggedStructure(structure)
+    
+    // Calculate precise drag offset based on where user clicked within the structure
+    if (containerRef.current) {
+      const containerRect = containerRef.current.getBoundingClientRect()
+      const relativeX = e.clientX - containerRect.left + scrollLeft
+      const relativeY = e.clientY - containerRect.top + scrollTop
+      
+      // Convert pixel position to cell position
+      let clickRow = 0
+      let clickCol = 0
+      
+      // Calculate click row
+      let currentY = getHeaderHeight()
+      while (clickRow < MAX_ROWS && currentY + getRowHeight(clickRow, rowHeights) < relativeY) {
+        currentY += getRowHeight(clickRow, rowHeights)
+        clickRow++
+      }
+      
+      // Calculate click column
+      let currentX = getHeaderWidth()
+      while (clickCol < 26 && currentX + getColumnWidth(clickCol, columnWidths) < relativeX) {
+        currentX += getColumnWidth(clickCol, columnWidths)
+        clickCol++
+      }
+      
+      setDragOffset({ 
+        row: clickRow - structure.startPosition.row, 
+        col: clickCol - structure.startPosition.col 
+      })
+    } else {
+      setDragOffset({ row: fallbackRow, col: fallbackCol })
+    }
+    
+    if (!selectedStructure || selectedStructure.id !== structure.id) {
+      selectStructure(structure)
+      setStartEditing(null)
+      setSelectedRange(null)
+    }
+  }
+
   // Sync cell values with structures
   React.useEffect(() => {
     setCellValues(prev => {
@@ -405,27 +460,33 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         }
       }
       
-      // Add values from structures (but only for cells not currently being edited)
-      for (let row = startRow; row < endRow; row++) {
-        for (let col = startCol; col < endCol; col++) {
-          const cellKey = getCellKey(row, col)
-          
-          // Skip if this cell is currently being edited - already handled above
-          if (editingCells.has(cellKey)) {
-            continue
-          }
-          
-          // Only sync from structures for non-editing cells
-          const structureValue = getCellValue(row, col, structures)
-          if (structureValue !== '') {
-            newMap.set(cellKey, structureValue)
+      // Add values from structures for ALL positions that have structures
+      // (not just visible viewport) to ensure old cached values are cleared
+      for (const [, structure] of structures) {
+        const { startPosition, dimensions } = structure
+        const endPosition = getEndPosition(startPosition, dimensions)
+        
+        for (let row = startPosition.row; row <= endPosition.row; row++) {
+          for (let col = startPosition.col; col <= endPosition.col; col++) {
+            const cellKey = getCellKey(row, col)
+            
+            // Skip if this cell is currently being edited - already handled above
+            if (editingCells.has(cellKey)) {
+              continue
+            }
+            
+            // Only sync from structures for non-editing cells
+            const structureValue = getCellValue(row, col, structures, positions)
+            if (structureValue !== '') {
+              newMap.set(cellKey, structureValue)
+            }
           }
         }
       }
       
       return newMap
     })
-  }, [structures, editingCells, startRow, endRow, startCol, endCol])
+  }, [structures, editingCells, positions])
 
   // Begin editing when startEditing is set
   React.useEffect(() => {
@@ -511,8 +572,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const handleStructureNameSubmit = () => {
     if (editingStructureName) {
       // Update the structure name (or remove it if empty)
-      setStructures(prev => {
-        const newStructures = new Map(prev)
+      setStructures((prev: StructureMap) => {
+        const newStructures = new Map<string, Structure>(prev)
         const structure = newStructures.get(editingStructureName)
         
         if (structure) {
@@ -572,14 +633,21 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const handleMouseDown = (row: number, col: number, e: React.MouseEvent) => {
     if (e.button !== 0) return // Only handle left-click
 
+    // Clear any stale drag state before processing new interactions
+    setIsDraggingStructure(false)
+    setDraggedStructure(null)
+    setDragOffset(null)
+    setDropTarget(null)
+    setLastValidDropTarget(null)
+
     // Check if this is a table header - if so, don't handle mouse down here
     // Let the column header click handler take care of it
-    if (isTableHeader(row, col, structures)) {
+    if (isTableHeader(row, col, structures, positions)) {
       return // Don't handle mouse down for table headers
     }
 
     // Check if the clicked cell is part of a structure
-    const structure = getStructureAtPosition(row, col, structures)
+    const structure = getStructureAtPosition(row, col, positions, structures)
     
     if (structure) {
       // Always clear column selection when clicking on any structure cell (including table cells)
@@ -589,10 +657,54 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       e.preventDefault()
       setIsDraggingStructure(true)
       setDraggedStructure(structure)
-      setDragOffset({ 
-        row: row - structure.startPosition.row, 
-        col: col - structure.startPosition.col 
-      })
+      
+      // For merged cells (cells that span multiple grid positions), calculate the precise click position
+      if (structure.type === 'cell' && 
+          (structure.dimensions.rows > 1 || structure.dimensions.cols > 1)) {
+        
+        // This is a merged cell - calculate precise offset based on mouse position
+        if (containerRef.current) {
+          const containerRect = containerRef.current.getBoundingClientRect()
+          const relativeX = e.clientX - containerRect.left + scrollLeft
+          const relativeY = e.clientY - containerRect.top + scrollTop
+          
+          // Convert pixel position to cell position
+          let clickRow = 0
+          let clickCol = 0
+          
+          // Calculate click row
+          let currentY = getHeaderHeight()
+          while (clickRow < MAX_ROWS && currentY + getRowHeight(clickRow, rowHeights) < relativeY) {
+            currentY += getRowHeight(clickRow, rowHeights)
+            clickRow++
+          }
+          
+          // Calculate click column
+          let currentX = getHeaderWidth()
+          while (clickCol < 26 && currentX + getColumnWidth(clickCol, columnWidths) < relativeX) {
+            currentX += getColumnWidth(clickCol, columnWidths)
+            clickCol++
+          }
+          
+          // Use the precise click position for offset calculation
+          setDragOffset({ 
+            row: clickRow - structure.startPosition.row, 
+            col: clickCol - structure.startPosition.col 
+          })
+        } else {
+          // Fallback to using the provided row/col (top-left corner)
+          setDragOffset({ 
+            row: row - structure.startPosition.row, 
+            col: col - structure.startPosition.col 
+          })
+        }
+      } else {
+        // For non-merged cells or other structures, use the simple calculation
+        setDragOffset({ 
+          row: row - structure.startPosition.row, 
+          col: col - structure.startPosition.col 
+        })
+      }
       
       // Also select the structure if it wasn't already selected
       if (!selectedStructure || selectedStructure.id !== structure.id) {
@@ -627,7 +739,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setDragStart(null)
   }
 
-  const handleRightClick = (row: number, col: number, e: React.MouseEvent) => {
+  const handleRightClick = (_row: number, _col: number, e: React.MouseEvent) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY })
   }
@@ -640,7 +752,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
 
     // Check if this is a table header cell
-    const structure = getStructureAtPosition(row, col, structures)
+    const structure = getStructureAtPosition(row, col, positions, structures)
     if (structure && structure.type === 'table') {
       const table = structure as any
       const columnIndex = col - table.startPosition.col
@@ -667,7 +779,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     if (e.button !== 0) return // Only handle left-click
 
     // Check if this is a table header cell
-    const structure = getStructureAtPosition(row, col, structures)
+    const structure = getStructureAtPosition(row, col, positions, structures)
     if (structure && structure.type === 'table') {
       const table = structure as any
       const columnIndex = col - table.startPosition.col
@@ -696,8 +808,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   }
 
   const handleHeaderHover = (row: number, col: number, isEntering: boolean) => {
-    if (isEntering && isTableHeader(row, col, structures)) {
-      const structure = getStructureAtPosition(row, col, structures)
+    if (isEntering && isTableHeader(row, col, structures, positions)) {
+      const structure = getStructureAtPosition(row, col, positions, structures)
       if (structure && structure.type === 'table') {
         const table = structure as any
         const headerLevel = getHeaderLevel(row, table)
@@ -714,32 +826,51 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }
 
-  const handleAddTableColumn = (tableId: string, insertAfterCol: number, position: 'left' | 'right') => {
+  const handleAddTableColumn = (tableId: string, _insertAfterCol: number, position: 'left' | 'right') => {
     // Find the table structure by ID
     const table = structures.get(tableId)
     
     if (!table || table.type !== 'table') return
     
-    const tableStructure = table as Table
+    const tableStructure = table as TableStructure
     
     // Update table dimensions
     const newDimensions = { 
-      rows: getDimensions(tableStructure).rows, 
-      cols: getDimensions(tableStructure).cols + 1 
+      rows: tableStructure.dimensions.rows, 
+      cols: tableStructure.dimensions.cols + 1 
     }
     
     // Calculate new table positions based on insert position
     let newStartPosition = { ...tableStructure.startPosition }
-    let newEndPosition = { ...tableStructure.endPosition }
     
     if (position === 'left') {
-      // Adding to the left: move start position left, keep end position
+      // Adding to the left: move start position left
       newStartPosition.col = tableStructure.startPosition.col - 1
-      newEndPosition.col = tableStructure.endPosition.col
-    } else {
-      // Adding to the right: keep start position, move end position right
-      newStartPosition.col = tableStructure.startPosition.col
-      newEndPosition.col = tableStructure.endPosition.col + 1
+    }
+    // For adding to the right, start position stays the same
+    
+    // Update cellIds array to accommodate the new column
+    const newCellIds: (string | null)[][] = []
+    for (let r = 0; r < tableStructure.dimensions.rows; r++) {
+      const row: (string | null)[] = []
+      for (let c = 0; c < newDimensions.cols; c++) {
+        if (position === 'left' && c === 0) {
+          // Insert null for new column at the beginning
+          row.push(null)
+        } else if (position === 'right' && c === newDimensions.cols - 1) {
+          // Insert null for new column at the end
+          row.push(null)
+        } else {
+          // Copy existing cell IDs, adjusting for insertion
+          const sourceCol = position === 'left' ? c - 1 : c
+          if (tableStructure.cellIds && tableStructure.cellIds[r] && sourceCol >= 0 && sourceCol < tableStructure.cellIds[r].length) {
+            row.push(tableStructure.cellIds[r][sourceCol])
+          } else {
+            row.push(null)
+          }
+        }
+      }
+      newCellIds.push(row)
     }
     
     // Update table structure
@@ -747,61 +878,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       ...tableStructure,
       dimensions: newDimensions,
       startPosition: newStartPosition,
-      endPosition: newEndPosition
+      cellIds: newCellIds
     }
     
-    // Update arrays within the table
-    const updatedArrays = tableStructure.arrays.map((array: StructureArray, arrayIndex: number) => {
-      const newArray : StructureArray = {
-        ...array,
-        startPosition: { ...array.startPosition, col: newStartPosition.col },
-        endPosition: { ...array.endPosition, col: newEndPosition.col },
-        size: array.size + 1,
-        cells: []
-      }
-      
-      // Create new cells array based on position
-      if (position === 'left') {
-        // Add new cell at the beginning
-        newArray.cells = [
-          {
-            type: 'cell' as const,
-            id: `cell-${array.startPosition.row}-${newStartPosition.col}`,
-            startPosition: { row: array.startPosition.row, col: newStartPosition.col },
-            endPosition: { row: array.startPosition.row, col: newStartPosition.col },
-            value: ''
-          },
-          ...array.cells.map((cell: any) => ({
-            ...cell,
-            startPosition: { ...cell.startPosition, col: cell.startPosition.col },
-            endPosition: { ...cell.endPosition, col: cell.endPosition.col }
-          }))
-        ]
-      } else {
-        // Add new cell at the end
-        newArray.cells = [
-          ...array.cells.map((cell: any) => ({
-            ...cell,
-            startPosition: { ...cell.startPosition, col: cell.startPosition.col },
-            endPosition: { ...cell.endPosition, col: cell.endPosition.col }
-          })),
-          {
-            type: 'cell' as const,
-            id: `cell-${array.startPosition.row}-${newEndPosition.col}`,
-            startPosition: { row: array.startPosition.row, col: newEndPosition.col },
-            endPosition: { row: array.startPosition.row, col: newEndPosition.col },
-            value: ''
-          }
-        ]
-      }
-      
-      return newArray
-    })
-    
-    updatedTable.arrays = updatedArrays
-    
     // Update the table structure
-    setStructures(prev => {
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       newStructures.set(tableStructure.id, updatedTable)
       return newStructures
@@ -813,97 +894,57 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }
 
-  const handleAddArrayColumn = (arrayId: string, insertAfterCol: number, position: 'left' | 'right') => {
+  const handleAddArrayColumn = (arrayId: string, _insertAfterCol: number, position: 'left' | 'right') => { // TODO: abstract column and row additions
     // Find the array structure by ID
     const array = structures.get(arrayId)
     
     if (!array || array.type !== 'array') return
     
-    const arrayStructure = array as StructureArray
+    const arrayStructure = array as ArrayStructure
     
-    // Calculate new array positions based on insert position
+    // Calculate new array dimensions based on insert position
     let newStartPosition = { ...arrayStructure.startPosition }
-    let newEndPosition = { ...arrayStructure.endPosition }
+    let newDimensions = { ...arrayStructure.dimensions }
     
     if (position === 'left') {
-      // Adding to the left: move start position left, keep end position
+      // Adding to the left: move start position left
       newStartPosition.col = arrayStructure.startPosition.col - 1
-      newEndPosition.col = arrayStructure.endPosition.col
-    } else {
-      // Adding to the right: keep start position, move end position right
-      newStartPosition.col = arrayStructure.startPosition.col
-      newEndPosition.col = arrayStructure.endPosition.col + 1
+    }
+    // For adding to the right, start position stays the same
+    
+    // Increase column count
+    newDimensions.cols += 1
+    
+    // Update cellIds array to accommodate the new column
+    const newCellIds: (string | null)[] = []
+    for (let i = 0; i < newDimensions.cols; i++) {
+      if (position === 'left' && i === 0) {
+        // Insert null for new column at the beginning
+        newCellIds.push(null)
+      } else if (position === 'right' && i === newDimensions.cols - 1) {
+        // Insert null for new column at the end
+        newCellIds.push(null)
+      } else {
+        // Copy existing cell IDs, adjusting for insertion
+        const sourceIndex = position === 'left' ? i - 1 : i
+        if (arrayStructure.cellIds && sourceIndex >= 0 && sourceIndex < arrayStructure.cellIds.length) {
+          newCellIds.push(arrayStructure.cellIds[sourceIndex])
+        } else {
+          newCellIds.push(null)
+        }
+      }
     }
     
     // Update array structure
     const updatedArray = {
       ...arrayStructure,
-      size: arrayStructure.size + 1,
       startPosition: newStartPosition,
-      endPosition: newEndPosition
+      dimensions: newDimensions,
+      cellIds: newCellIds
     }
-    
-    // Update cells within the array
-    const updatedCells = []
-    
-    // Calculate current dimensions from the array structure
-    const currentRows = arrayStructure.endPosition.row - arrayStructure.startPosition.row + 1
-    const currentCols = arrayStructure.endPosition.col - arrayStructure.startPosition.col + 1
-    
-    if (position === 'left') {
-      // Add new cells at the beginning of each row
-      for (let r = 0; r < currentRows; r++) {
-        const cellRow = newStartPosition.row + r
-        // Add new cell at the beginning
-        updatedCells.push({
-          type: 'cell' as const,
-          id: `cell-${cellRow}-${newStartPosition.col}`,
-          startPosition: { row: cellRow, col: newStartPosition.col },
-          endPosition: { row: cellRow, col: newStartPosition.col },
-          value: ''
-        })
-        // Add existing cells
-        for (let c = 0; c < currentCols; c++) {
-          const existingCellIndex = r * currentCols + c
-          if (existingCellIndex < arrayStructure.cells.length) {
-            updatedCells.push({
-              ...arrayStructure.cells[existingCellIndex],
-              startPosition: { ...arrayStructure.cells[existingCellIndex].startPosition },
-              endPosition: { ...arrayStructure.cells[existingCellIndex].endPosition }
-            })
-          }
-        }
-      }
-    } else {
-      // Add new cells at the end of each row
-      for (let r = 0; r < currentRows; r++) {
-        const cellRow = newStartPosition.row + r
-        // Add existing cells
-        for (let c = 0; c < currentCols; c++) {
-          const existingCellIndex = r * currentCols + c
-          if (existingCellIndex < arrayStructure.cells.length) {
-            updatedCells.push({
-              ...arrayStructure.cells[existingCellIndex],
-              startPosition: { ...arrayStructure.cells[existingCellIndex].startPosition },
-              endPosition: { ...arrayStructure.cells[existingCellIndex].endPosition }
-            })
-          }
-        }
-        // Add new cell at the end
-        updatedCells.push({
-          type: 'cell' as const,
-          id: `cell-${cellRow}-${newEndPosition.col}`,
-          startPosition: { row: cellRow, col: newEndPosition.col },
-          endPosition: { row: cellRow, col: newEndPosition.col },
-          value: ''
-        })
-      }
-    }
-    
-    updatedArray.cells = updatedCells
     
     // Update the array structure
-    setStructures(prev => {
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       newStructures.set(arrayStructure.id, updatedArray)
       return newStructures
@@ -916,60 +957,45 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }
 
-  const handleAddArrayRow = (arrayId: string, insertAfterRow: number, position: 'bottom') => {
+  const handleAddArrayRow = (arrayId: string, insertAfterRow: number, _position: 'bottom') => {
     // Find the array structure by ID
     const array = structures.get(arrayId)
     
     if (!array || array.type !== 'array') return
     
-    const arrayStructure = array as StructureArray
-    const insertRow = insertAfterRow + 1
+    const arrayStructure = array as ArrayStructure
     
-    // Calculate current dimensions from the array structure
-    const currentRows = arrayStructure.endPosition.row - arrayStructure.startPosition.row + 1
-    const currentCols = arrayStructure.endPosition.col - arrayStructure.startPosition.col + 1
+    // Update array structure with increased row count
+    const newDimensions = {
+      rows: arrayStructure.dimensions.rows + 1,
+      cols: arrayStructure.dimensions.cols
+    }
+    
+    // Update cellIds array to accommodate the new row
+    const newCellIds: (string | null)[] = []
+    for (let i = 0; i < newDimensions.rows; i++) {
+      if (i === newDimensions.rows - 1) {
+        // Insert null for new row at the end
+        newCellIds.push(null)
+      } else {
+        // Copy existing cell IDs
+        if (arrayStructure.cellIds && i < arrayStructure.cellIds.length) {
+          newCellIds.push(arrayStructure.cellIds[i])
+        } else {
+          newCellIds.push(null)
+        }
+      }
+    }
     
     // Update array structure
     const updatedArray = {
       ...arrayStructure,
-      endPosition: {
-        row: arrayStructure.endPosition.row + 1,
-        col: arrayStructure.endPosition.col
-      }
+      dimensions: newDimensions,
+      cellIds: newCellIds
     }
-    
-    // Create new cells for the inserted row
-    const newRowCells = []
-    for (let c = 0; c < currentCols; c++) {
-      const cellCol = arrayStructure.startPosition.col + c
-      newRowCells.push({
-        type: 'cell' as const,
-        id: `cell-${insertRow}-${cellCol}`,
-        startPosition: { row: insertRow, col: cellCol },
-        endPosition: { row: insertRow, col: cellCol },
-        value: ''
-      })
-    }
-    
-    // Update cells within the array
-    const insertIndex = insertRow - arrayStructure.startPosition.row
-    const rowsBeforeInsert = insertIndex
-    const cellsBeforeInsert = rowsBeforeInsert * currentCols
-    
-    const updatedCells = [
-      ...arrayStructure.cells.slice(0, cellsBeforeInsert),
-      ...newRowCells,
-      ...arrayStructure.cells.slice(cellsBeforeInsert).map((cell: any) => ({
-        ...cell,
-        startPosition: { ...cell.startPosition, row: cell.startPosition.row + 1 },
-        endPosition: { ...cell.endPosition, row: cell.endPosition.row + 1 }
-      }))
-    ]
-    
-    updatedArray.cells = updatedCells
     
     // Update the array structure
-    setStructures(prev => {
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       newStructures.set(arrayStructure.id, updatedArray)
       return newStructures
@@ -1014,74 +1040,43 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     
     if (!table || table.type !== 'table') return
     
-    const tableStructure = table as any
-    const insertRow = position === 'top' ? insertAfterRow : insertAfterRow + 1
+    const tableStructure = table as TableStructure
     
     // Update table dimensions
     const newDimensions = { 
-      rows: getDimensions(tableStructure).rows + 1, 
-      cols: getDimensions(tableStructure).cols
+      rows: tableStructure.dimensions.rows + 1, 
+      cols: tableStructure.dimensions.cols
+    }
+    
+    // Update cellIds array to accommodate the new row
+    const newCellIds: (string | null)[][] = []
+    for (let r = 0; r < newDimensions.rows; r++) {
+      if ((position === 'bottom' && r === newDimensions.rows - 1) || 
+          (position === 'top' && r === 0)) {
+        // Insert row of nulls for new row
+        const newRow: (string | null)[] = new Array(newDimensions.cols).fill(null)
+        newCellIds.push(newRow)
+      } else {
+        // Copy existing row, adjusting for insertion
+        const sourceRow = position === 'top' ? r - 1 : r
+        if (tableStructure.cellIds && sourceRow >= 0 && sourceRow < tableStructure.cellIds.length) {
+          newCellIds.push([...tableStructure.cellIds[sourceRow]])
+        } else {
+          const newRow: (string | null)[] = new Array(newDimensions.cols).fill(null)
+          newCellIds.push(newRow)
+        }
+      }
     }
     
     // Update table structure
     const updatedTable = {
       ...tableStructure,
       dimensions: newDimensions,
-      endPosition: {
-        row: tableStructure.endPosition.row + 1,
-        col: tableStructure.endPosition.col
-      }
+      cellIds: newCellIds
     }
-    
-    // Create new array for the inserted row
-    const newRowCells = []
-    for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
-      const cellCol = tableStructure.startPosition.col + c
-      newRowCells.push({
-        type: 'cell' as const,
-        id: `cell-${insertRow}-${cellCol}`,
-        startPosition: { row: insertRow, col: cellCol },
-        endPosition: { row: insertRow, col: cellCol },
-        value: ''
-      })
-    }
-    
-    const newArray = {
-      type: 'array' as const,
-      id: `array-${insertRow}-${tableStructure.startPosition.col}`,
-      startPosition: { row: insertRow, col: tableStructure.startPosition.col },
-      endPosition: { row: insertRow, col: tableStructure.endPosition.col },
-      cells: newRowCells,
-      dimensions: { rows: 1, cols: getDimensions(tableStructure).cols }
-    }
-    
-    // Update arrays within the table
-    const insertIndex = insertRow - tableStructure.startPosition.row
-    const updatedArrays = [
-      ...tableStructure.arrays.slice(0, insertIndex),
-      newArray,
-      ...tableStructure.arrays.slice(insertIndex).map((array: any) => ({
-        ...array,
-        startPosition: {
-          ...array.startPosition,
-          row: array.startPosition.row + 1
-        },
-        endPosition: {
-          ...array.endPosition,
-          row: array.endPosition.row + 1
-        },
-        cells: array.cells.map((cell: any) => ({
-          ...cell,
-          startPosition: { ...cell.startPosition, row: cell.startPosition.row + 1 },
-          endPosition: { ...cell.endPosition, row: cell.endPosition.row + 1 }
-        }))
-      }))
-    ]
-    
-    updatedTable.arrays = updatedArrays
     
     // Update the table structure
-    setStructures(prev => {
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       newStructures.set(tableStructure.id, updatedTable)
       return newStructures
@@ -1114,7 +1109,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     e.preventDefault()
     e.stopPropagation()
     
-    if (!selectedStructure || selectedStructure.type === 'column') {
+    if (!selectedStructure) {
       return // Only allow resizing for arrays, tables, and cells
     }
 
@@ -1126,7 +1121,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setStructureResizeStartY(e.clientY)
     
     // Store the current dimensions
-    setStructureResizeStartDimensions(getDimensions(selectedStructure))
+    setStructureResizeStartDimensions(selectedStructure.dimensions)
   }
 
   // Global keydown event handler for column header editing
@@ -1155,10 +1150,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               type: 'cell' as const,
               id: mergedCellId,
               startPosition: { row: minRow, col: minCol },
-              endPosition: { row: maxRow, col: maxCol },
+              dimensions: { rows: maxRow - minRow + 1, cols: maxCol - minCol + 1 },
               value: e.key
             }
-            setStructures(prev => {
+            setStructures((prev: StructureMap) => {
               const newStructures = new Map(prev)
               newStructures.set(mergedCellId, newMergedCell)
               return newStructures
@@ -1259,35 +1254,152 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   React.useEffect(() => {
     const handleGlobalMouseUp = () => {
       try {
-        // Handle structure drag drop only if we have all required data and no conflict dialog
-        if (isDraggingStructure && draggedStructure && dropTarget && !showConflictDialog) {
-          const structureCells = getCellsInStructure(draggedStructure, structures)
-          const conflicts = detectConflicts(dropTarget, structureCells, structures, draggedStructure)
+        // Only process structure drops if we're actually dragging and have valid state
+        if (isDraggingStructure && draggedStructure && lastValidDropTarget) {
+        // Check if the cell is being dropped into a table or array
+        const targetStructure = getStructureAtPosition(lastValidDropTarget.row, lastValidDropTarget.col, positions, structures)
+        
+        if (draggedStructure.type === 'cell' && targetStructure && 
+            (targetStructure.type === 'table' || targetStructure.type === 'array')) {
           
-          if (conflicts.length > 0) {
-            // Show conflict dialog
-            setShowConflictDialog(true)
-            setConflictDialogData({
-              targetPosition: dropTarget,
-              conflictingCells: conflicts
-            })
-            // Don't clean up drag state yet - let conflict dialog handle it
-            return
-          } else {
-
-            // No conflicts, proceed with move
-            const newStructures = moveStructureCells(draggedStructure, dropTarget, structures, false)
+          // Handle cell being dropped into a table or array
+          if (targetStructure.type === 'table') {
+            const table = targetStructure as TableStructure
+            const tableRow = lastValidDropTarget.row - table.startPosition.row
+            const tableCol = lastValidDropTarget.col - table.startPosition.col
             
-            // Update structure position
-            const updatedStructure = moveStructurePosition(draggedStructure, dropTarget)
-            const finalStructures = new Map(newStructures)
-            finalStructures.set(updatedStructure.id, updatedStructure)
+            // Ensure the drop position is within table bounds
+            if (tableRow >= 0 && tableRow < table.dimensions.rows && 
+                tableCol >= 0 && tableCol < table.dimensions.cols) {
+              
+              // Remove the dragged cell from structures and positions
+              const newStructures = new Map(structures)
+              let newPositions = removeStructureFromPositionMap(draggedStructure, positions)
+              newStructures.delete(draggedStructure.id)
+              
+              // Create a new cell at the drop position with the dragged cell's value
+              const newCellId = `cell-${lastValidDropTarget.row}-${lastValidDropTarget.col}-${Date.now()}`
+              const newCell: CellStructure = {
+                type: 'cell',
+                id: newCellId,
+                startPosition: { row: lastValidDropTarget.row, col: lastValidDropTarget.col },
+                dimensions: { rows: 1, cols: 1 },
+                value: draggedStructure.value
+              }
+              
+              // Add the new cell to structures
+              newStructures.set(newCellId, newCell)
+              newPositions = addStructureToPositionMap(newCell, newPositions)
+              
+              // Update the table's cellIds to reference the new cell
+              const updatedTable = { ...table }
+              const newCellIds = updatedTable.cellIds.map(row => [...row]) // Deep copy
+              newCellIds[tableRow][tableCol] = newCellId
+              updatedTable.cellIds = newCellIds
+              
+              newStructures.set(table.id, updatedTable)
+              
+              setStructures(newStructures)
+              setPositions(newPositions)
+              
+              // Select the table since the cell is now part of it
+              selectStructure(updatedTable)
+            } else {
+              // If drop position is outside table bounds, perform regular move
+              const {structures: newStructures, positions: newPositions} = moveStructure(draggedStructure, lastValidDropTarget, structures, positions, true)
+              setStructures(newStructures)
+              setPositions(newPositions)
+              // Update selected structure with the moved structure
+              const updatedStructure = newStructures.get(draggedStructure.id)
+              if (updatedStructure) {
+                selectStructure(updatedStructure)
+              }
+            }
+          } else if (targetStructure.type === 'array') {
+            const array = targetStructure as ArrayStructure
+            const arrayRow = lastValidDropTarget.row - array.startPosition.row
+            const arrayCol = lastValidDropTarget.col - array.startPosition.col
             
-            setStructures(finalStructures)
-            
-            // Update selected structure
+            // Ensure the drop position is within array bounds
+            if (arrayRow >= 0 && arrayRow < array.dimensions.rows && 
+                arrayCol >= 0 && arrayCol < array.dimensions.cols) {
+              
+              // Calculate the index in the array's cellIds
+              let arrayIndex: number
+              if (array.direction === 'horizontal') {
+                arrayIndex = arrayCol
+              } else {
+                arrayIndex = arrayRow
+              }
+              
+              // Ensure the index is valid
+              if (arrayIndex >= 0 && arrayIndex < array.cellIds.length) {
+                // Remove the dragged cell from structures and positions
+                const newStructures = new Map(structures)
+                let newPositions = removeStructureFromPositionMap(draggedStructure, positions)
+                newStructures.delete(draggedStructure.id)
+                
+                // Create a new cell at the drop position with the dragged cell's value
+                const newCellId = `cell-${lastValidDropTarget.row}-${lastValidDropTarget.col}-${Date.now()}`
+                const newCell: CellStructure = {
+                  type: 'cell',
+                  id: newCellId,
+                  startPosition: { row: lastValidDropTarget.row, col: lastValidDropTarget.col },
+                  dimensions: { rows: 1, cols: 1 },
+                  value: draggedStructure.value
+                }
+                
+                // Add the new cell to structures
+                newStructures.set(newCellId, newCell)
+                newPositions = addStructureToPositionMap(newCell, newPositions)
+                
+                // Update the array's cellIds to reference the new cell
+                const updatedArray = { ...array }
+                const newCellIds = [...updatedArray.cellIds] // Copy array
+                newCellIds[arrayIndex] = newCellId
+                updatedArray.cellIds = newCellIds
+                
+                newStructures.set(array.id, updatedArray)
+                
+                setStructures(newStructures)
+                setPositions(newPositions)
+                
+                // Select the array since the cell is now part of it
+                selectStructure(updatedArray)
+              } else {
+                // If index is invalid, perform regular move
+                const {structures: newStructures, positions: newPositions} = moveStructure(draggedStructure, lastValidDropTarget, structures, positions, true)
+                setStructures(newStructures)
+                setPositions(newPositions)
+                // Update selected structure with the moved structure
+                const updatedStructure = newStructures.get(draggedStructure.id)
+                if (updatedStructure) {
+                  selectStructure(updatedStructure)
+                }
+              }
+            } else {
+              // If drop position is outside array bounds, perform regular move
+              const {structures: newStructures, positions: newPositions} = moveStructure(draggedStructure, lastValidDropTarget, structures, positions, true)
+              setStructures(newStructures)
+              setPositions(newPositions)
+              // Update selected structure with the moved structure
+              const updatedStructure = newStructures.get(draggedStructure.id)
+              if (updatedStructure) {
+                selectStructure(updatedStructure)
+              }
+            }
+          }
+        } else {
+          // For all other cases (non-cell structures, or cells not dropped into tables/arrays), perform regular move
+          const {structures: newStructures, positions: newPositions} = moveStructure(draggedStructure, lastValidDropTarget, structures, positions, true)
+          setStructures(newStructures)
+          setPositions(newPositions)
+          // Update selected structure with the moved structure
+          const updatedStructure = newStructures.get(draggedStructure.id)
+          if (updatedStructure) {
             selectStructure(updatedStructure)
           }
+        }
         }
 
         // Handle column drag drop
@@ -1300,28 +1412,16 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             const targetColumnIndex = columnDropTarget.targetColumnIndex
             
             if (sourceColumnIndex !== targetColumnIndex) {
-              // Reorder columns in the table structure
-              const updatedArrays = tableStructure.arrays.map((array: any) => {
-                const newCells = [...array.cells]
-                
-                // Move the cell from source to target position
-                const sourceCell = newCells[sourceColumnIndex]
-                newCells.splice(sourceColumnIndex, 1)
-                newCells.splice(targetColumnIndex, 0, sourceCell)
-                
-                return {
-                  ...array,
-                  cells: newCells
-                }
-              })
+              // For tables, column reordering is handled through the position map
+              // No explicit array manipulation needed with the new structure
               
+              // Table structure itself doesn't need to change for column reordering
               const updatedTable = {
-                ...tableStructure,
-                arrays: updatedArrays
+                ...tableStructure
               }
               
               // Update the table structure
-              setStructures(prev => {
+              setStructures((prev: StructureMap) => {
                 const newStructures = new Map(prev)
                 newStructures.set(tableStructure.id, updatedTable)
                 return newStructures
@@ -1361,10 +1461,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
-      // Don't handle mouse move if conflict dialog is showing
-      if (showConflictDialog) {
-        return
-      }
       
       // Handle structure dragging
       if (isDraggingStructure && draggedStructure && dragOffset && containerRef.current) {
@@ -1396,7 +1492,16 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           col: Math.max(0, targetCol - dragOffset.col)
         }
         
-        setDropTarget(newDropTarget)
+        // Validate the new drop target
+        const isValid = isValidMoveTarget(draggedStructure, newDropTarget, structures, positions)
+        
+        if (isValid) {
+          // Valid location: update both drop target and last valid drop target
+          setDropTarget(newDropTarget)
+          setLastValidDropTarget(newDropTarget)
+        }
+        // For invalid locations: don't update dropTarget, so indicator stays at last valid position
+        // lastValidDropTarget also remains unchanged (keeps the last valid position)
       }
 
       // Handle sheet header resizing
@@ -1438,47 +1543,58 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             const tableStructure = table as any
             const currentColumnIndex = draggedColumn.columnIndex
             
-            // Calculate target column based on mouse position relative to table
-            const containerRect = containerRef.current.getBoundingClientRect()
-            const relativeX = e.clientX - containerRect.left + scrollLeft
-            
-            // Find which column we're over within the table
-            let targetColumnIndex = currentColumnIndex
-            let currentX = getColumnPosition(tableStructure.startPosition.col, columnWidths)
-            
-            for (let c = 0; c < getDimensions(tableStructure).cols; c++) {
-              const colWidth = getColumnWidth(tableStructure.startPosition.col + c, columnWidths)
-              if (relativeX >= currentX && relativeX < currentX + colWidth) {
-                targetColumnIndex = c
-                break
+              // Calculate target column based on mouse position relative to table
+              const containerRect = containerRef.current.getBoundingClientRect()
+              const relativeX = e.clientX - containerRect.left + scrollLeft
+              
+              // Find which column we're over within the table
+              let targetColumnIndex = currentColumnIndex
+              let currentX = getColumnPosition(tableStructure.startPosition.col, columnWidths)
+              
+              for (let c = 0; c < tableStructure.dimensions.cols; c++) {
+                const colWidth = getColumnWidth(tableStructure.startPosition.col + c, columnWidths)
+                if (relativeX >= currentX && relativeX < currentX + colWidth) {
+                  targetColumnIndex = c
+                  break
+                }
+                currentX += colWidth
               }
-              currentX += colWidth
-            }
             
             // Perform real-time column reordering if target changed
             if (targetColumnIndex !== currentColumnIndex) {
-              // Reorder columns in the table structure in real-time
-              const updatedArrays = tableStructure.arrays.map((array: any) => {
-                const newCells = [...array.cells]
+              // For tables, column reordering is handled through the position map
+              // No explicit array manipulation needed with the new structure
+              
+              // TODO Update each array in the table
+              // for (const array of tableArrays) {
+              //   const arrayCells = getArrayCells(array.id, structures)
                 
-                // Move the cell from source to target position
-                const sourceCell = newCells[currentColumnIndex]
-                newCells.splice(currentColumnIndex, 1)
-                newCells.splice(targetColumnIndex, 0, sourceCell)
-                
-                return {
-                  ...array,
-                  cells: newCells
-                }
-              })
+              //   if (arrayCells.length > currentColumnIndex && arrayCells.length > targetColumnIndex) {
+              //     // Create new cellIds array with reordered cells
+              //     const newCellIds = [...array.cellIds]
+              //     const sourceCellId = newCellIds[currentColumnIndex]
+              //     newCellIds.splice(currentColumnIndex, 1)
+              //     newCellIds.splice(targetColumnIndex, 0, sourceCellId)
+                  
+              //     // Update the array structure
+              //     setStructures((prev: StructureMap) => {
+              //       const newStructures = new Map(prev)
+              //       const updatedArray = {
+              //         ...array,
+              //         cellIds: newCellIds
+              //       }
+              //       newStructures.set(array.id, updatedArray)
+              //       return newStructures
+              //     })
+              //   }
+              // }
               
               const updatedTable = {
-                ...tableStructure,
-                arrays: updatedArrays
+                ...tableStructure
               }
               
               // Update the table structure in real-time
-              setStructures(prev => {
+              setStructures((prev: StructureMap) => {
                 const newStructures = new Map(prev)
                 newStructures.set(tableStructure.id, updatedTable)
                 return newStructures
@@ -1531,9 +1647,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         }
         
         // Get current dimensions
-        const { rows: currentRows, cols: currentCols } = getDimensions(selectedStructure)
+        const { rows: currentRows, cols: currentCols } = selectedStructure.dimensions
         const originalStartPosition = selectedStructure.startPosition
-        const originalEndPosition = selectedStructure.endPosition
+        const originalEndPosition = getEndPosition(selectedStructure.startPosition, selectedStructure.dimensions)
         
         // Calculate new boundaries based on resize direction
         let newStartPosition = { ...originalStartPosition }
@@ -1565,7 +1681,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         if ((newRows !== currentRows || newCols !== currentCols) && newRows >= 1 && newCols >= 1) {
           // For arrays, ensure we maintain direction constraints
           if (selectedStructure.type === 'array') {
-            const arrayStructure = selectedStructure as StructureArray
+            const arrayStructure = selectedStructure as ArrayStructure
             if (arrayStructure.direction === 'horizontal' && newRows !== 1) {
               // Horizontal arrays must stay at 1 row
               if (structureResizeDirection === 'top' || structureResizeDirection === 'corner-tl' || structureResizeDirection === 'corner-tr') {
@@ -1587,19 +1703,105 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             const finalCols = newEndPosition.col - newStartPosition.col + 1
             
             if (finalRows !== currentRows || finalCols !== currentCols) {
-              // Create updated array structure
-              const newCells = []
-              for (let r = 0; r < finalRows; r++) {
-                for (let c = 0; c < finalCols; c++) {
-                  const cellRow = newStartPosition.row + r
-                  const cellCol = newStartPosition.col + c
-                  newCells.push({
-                    type: 'cell' as const,
-                    id: `cell-${cellRow}-${cellCol}`,
-                    startPosition: { row: cellRow, col: cellCol },
-                    endPosition: { row: cellRow, col: cellCol },
-                    value: getCellValue(cellRow, cellCol, structures)
-                  })
+              // Handle array resizing with proper cell substructure management
+              const array = arrayStructure as ArrayStructure
+              const originalSize = array.cellIds.length
+              const finalSize = arrayStructure.direction === 'horizontal' ? finalCols : finalRows
+              
+              // Create new cellIds array for the resized array
+              const newCellIds: (string | null)[] = []
+              
+              // Track cells that need to be removed from the array (and placed back on grid)
+              const cellsToRemove: { cell: CellStructure, newPosition: Position }[] = []
+              
+              for (let i = 0; i < finalSize; i++) {
+                let cellRow, cellCol
+                if (arrayStructure.direction === 'horizontal') {
+                  cellRow = newStartPosition.row
+                  cellCol = newStartPosition.col + i
+                } else {
+                  cellRow = newStartPosition.row + i
+                  cellCol = newStartPosition.col
+                }
+                
+                let cellId: string | null = null
+                
+                // Check if this position was within the original array bounds
+                if (i < originalSize && array.cellIds[i]) {
+                  // This cell was already in the array - keep its reference
+                  cellId = array.cellIds[i]
+                  
+                  // Update the cell's position if the array moved
+                  if (cellId) {
+                    const existingCell = structures.get(cellId) as CellStructure
+                    if (existingCell && (existingCell.startPosition.row !== cellRow || existingCell.startPosition.col !== cellCol)) {
+                      setStructures((prev: StructureMap) => {
+                        const newStructures = new Map(prev)
+                        const updatedCell = {
+                          ...existingCell,
+                          startPosition: { row: cellRow, col: cellCol }
+                        }
+                        newStructures.set(cellId!, updatedCell)
+                        return newStructures
+                      })
+                    }
+                  }
+                } else {
+                  // This is a new position - check if there's an existing cell structure there
+                  const existingStructure = getStructureAtPosition(cellRow, cellCol, positions, structures)
+                  if (existingStructure && existingStructure.type === 'cell') {
+                    // Existing cell - add it to the array
+                    cellId = existingStructure.id
+                  } else {
+                    // No existing cell - check if there's a value from any other structure
+                    const existingValue = getCellValue(cellRow, cellCol, structures, positions)
+                    if (existingValue) {
+                      // Create a new cell with the existing value
+                      const newCellId = `cell-${cellRow}-${cellCol}-${Date.now()}`
+                      const newCell: CellStructure = {
+                        type: 'cell',
+                        id: newCellId,
+                        startPosition: { row: cellRow, col: cellCol },
+                        dimensions: { rows: 1, cols: 1 },
+                        value: existingValue
+                      }
+                      setStructures((prev: StructureMap) => {
+                        const newStructures = new Map(prev)
+                        newStructures.set(newCellId, newCell)
+                        return newStructures
+                      })
+                      cellId = newCellId
+                    }
+                  }
+                }
+                
+                newCellIds.push(cellId)
+              }
+              
+              // Handle cells that are now outside the array bounds (shrinking case)
+              if (array.cellIds) {
+                for (let i = 0; i < array.cellIds.length; i++) {
+                  const cellId = array.cellIds[i]
+                  if (cellId && i >= finalSize) {
+                    // This cell is now outside the array - remove it from array and place on grid
+                    const cell = structures.get(cellId) as CellStructure
+                    if (cell) {
+                      // Calculate the new position for the removed cell
+                      let newPosition: Position
+                      if (arrayStructure.direction === 'horizontal') {
+                        newPosition = {
+                          row: originalStartPosition.row,
+                          col: originalStartPosition.col + i
+                        }
+                      } else {
+                        newPosition = {
+                          row: originalStartPosition.row + i,
+                          col: originalStartPosition.col
+                        }
+                      }
+                      cellsToRemove.push({ cell, newPosition })
+                    }
+                  }
                 }
               }
               
@@ -1607,66 +1809,211 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 ...arrayStructure,
                 startPosition: newStartPosition,
                 endPosition: newEndPosition,
-                cells: newCells,
-                size: newCells.length
-              } as StructureArray
+                dimensions: { rows: finalRows, cols: finalCols },
+                cellIds: newCellIds
+              } as ArrayStructure
               
               // Update structures map
-              setStructures(prev => {
+              setStructures((prev: StructureMap) => {
                 const newStructures = new Map(prev)
                 newStructures.set(selectedStructure.id, updatedStructure)
+                
+                // Update positions for removed cells
+                for (const { cell, newPosition } of cellsToRemove) {
+                  const updatedCell = {
+                    ...cell,
+                    startPosition: newPosition
+                  }
+                  newStructures.set(cell.id, updatedCell)
+                }
+                
                 return newStructures
+              })
+              
+              // Update position map
+              setPositions((prev: PositionMap) => {
+                let newPositions = prev
+                
+                // Update position map for the resized array
+                newPositions = removeStructureFromPositionMap(selectedStructure, newPositions)
+                newPositions = addStructureToPositionMap(updatedStructure, newPositions)
+                
+                // Update position map for removed cells
+                for (const { cell, newPosition } of cellsToRemove) {
+                  newPositions = removeStructureFromPositionMap(cell, newPositions)
+                  const updatedCell = {
+                    ...cell,
+                    startPosition: newPosition
+                  }
+                  newPositions = addStructureToPositionMap(updatedCell, newPositions)
+                }
+                
+                return newPositions
               })
               
               // Update selected structure
               selectStructure(updatedStructure)
             }
           } else if (selectedStructure.type === 'table') {
-            // Handle table resizing
+            // Handle table resizing with proper cell substructure management
+            const table = selectedStructure as TableStructure
+            const originalRows = table.dimensions.rows
+            const originalCols = table.dimensions.cols
             const finalRows = newEndPosition.row - newStartPosition.row + 1
             const finalCols = newEndPosition.col - newStartPosition.col + 1
+            
+            // Create new cellIds array for the resized table
+            const newCellIds: (string | null)[][] = []
+            
+            // Track cells that need to be removed from the table (and placed back on grid)
+            const cellsToRemove: { cell: CellStructure, newPosition: Position }[] = []
+            
+            for (let r = 0; r < finalRows; r++) {
+              const rowCells: (string | null)[] = []
+              for (let c = 0; c < finalCols; c++) {
+                const cellRow = newStartPosition.row + r
+                const cellCol = newStartPosition.col + c
+                
+                let cellId: string | null = null
+                
+                // Check if this position was within the original table bounds
+                const originalTableRow = cellRow - originalStartPosition.row
+                const originalTableCol = cellCol - originalStartPosition.col
+                
+                if (originalTableRow >= 0 && originalTableRow < originalRows && 
+                    originalTableCol >= 0 && originalTableCol < originalCols &&
+                    table.cellIds && table.cellIds[originalTableRow] && 
+                    table.cellIds[originalTableRow][originalTableCol]) {
+                  // This cell was already in the table - keep its reference
+                  cellId = table.cellIds[originalTableRow][originalTableCol]
+                  
+                  // Update the cell's position if the table moved
+                  if (cellId) {
+                    const existingCell = structures.get(cellId) as CellStructure
+                    if (existingCell && (existingCell.startPosition.row !== cellRow || existingCell.startPosition.col !== cellCol)) {
+                      setStructures((prev: StructureMap) => {
+                        const newStructures = new Map(prev)
+                        const updatedCell = {
+                          ...existingCell,
+                          startPosition: { row: cellRow, col: cellCol }
+                        }
+                        newStructures.set(cellId!, updatedCell)
+                        return newStructures
+                      })
+                    }
+                  }
+                } else {
+                  // This is a new position - check if there's an existing cell structure there
+                  const existingStructure = getStructureAtPosition(cellRow, cellCol, positions, structures)
+                  if (existingStructure && existingStructure.type === 'cell') {
+                    // Existing cell - add it to the table
+                    cellId = existingStructure.id
+                  } else {
+                    // No existing cell - check if there's a value from any other structure
+                    const existingValue = getCellValue(cellRow, cellCol, structures, positions)
+                    if (existingValue) {
+                      // Create a new cell with the existing value
+                      const newCellId = `cell-${cellRow}-${cellCol}-${Date.now()}`
+                      const newCell: CellStructure = {
+                        type: 'cell',
+                        id: newCellId,
+                        startPosition: { row: cellRow, col: cellCol },
+                        dimensions: { rows: 1, cols: 1 },
+                        value: existingValue
+                      }
+                      setStructures((prev: StructureMap) => {
+                        const newStructures = new Map(prev)
+                        newStructures.set(newCellId, newCell)
+                        return newStructures
+                      })
+                      cellId = newCellId
+                    }
+                  }
+                }
+                
+                rowCells.push(cellId)
+              }
+              newCellIds.push(rowCells)
+            }
+            
+            // Handle cells that are now outside the table bounds (shrinking case)
+            if (table.cellIds) {
+              for (let r = 0; r < table.cellIds.length; r++) {
+                for (let c = 0; c < table.cellIds[r].length; c++) {
+                  const cellId = table.cellIds[r][c]
+                  if (cellId) {
+                    const cellRow = originalStartPosition.row + r
+                    const cellCol = originalStartPosition.col + c
+                    
+                    // Check if this cell position is still within the new table bounds
+                    const newTableRow = cellRow - newStartPosition.row
+                    const newTableCol = cellCol - newStartPosition.col
+                    
+                    const isStillInTable = newTableRow >= 0 && newTableRow < finalRows && 
+                                         newTableCol >= 0 && newTableCol < finalCols
+                    
+                    if (!isStillInTable) {
+                      // This cell is now outside the table - remove it from table and place on grid
+                      const cell = structures.get(cellId) as CellStructure
+                      if (cell) {
+                        // Calculate the new position for the removed cell
+                        const newPosition: Position = {
+                          row: cellRow,
+                          col: cellCol
+                        }
+                        cellsToRemove.push({ cell, newPosition })
+                      }
+                    }
+                  }
+                }
+              }
+            }
             
             // Create updated table structure
             const updatedStructure = {
               ...selectedStructure,
               startPosition: newStartPosition,
               endPosition: newEndPosition,
-              dimensions: { rows: finalRows, cols: finalCols }
-            } as Table
-
-            // Update arrays for tables
-            const arrays = []
-            for (let r = 0; r < finalRows; r++) {
-              const rowCells = []
-              for (let c = 0; c < finalCols; c++) {
-                const cellRow = newStartPosition.row + r
-                const cellCol = newStartPosition.col + c
-                rowCells.push({
-                  type: 'cell' as const,
-                  id: `cell-${cellRow}-${cellCol}`,
-                  startPosition: { row: cellRow, col: cellCol },
-                  endPosition: { row: cellRow, col: cellCol },
-                  value: getCellValue(cellRow, cellCol, structures)
-                })
-              }
-              
-              arrays.push({
-                type: 'array' as const,
-                id: `array-${newStartPosition.row + r}-${newStartPosition.col}`,
-                startPosition: { row: newStartPosition.row + r, col: newStartPosition.col },
-                endPosition: { row: newStartPosition.row + r, col: newStartPosition.col + finalCols - 1 },
-                cells: rowCells,
-                direction: 'horizontal' as const,
-                size: finalCols
-              })
-            }
-            ;(updatedStructure as any).arrays = arrays
+              dimensions: { rows: finalRows, cols: finalCols },
+              cellIds: newCellIds
+            } as TableStructure
               
             // Update structures map
-            setStructures(prev => {
+            setStructures((prev: StructureMap) => {
               const newStructures = new Map(prev)
               newStructures.set(selectedStructure.id, updatedStructure)
+              
+              // Update positions for removed cells
+              for (const { cell, newPosition } of cellsToRemove) {
+                const updatedCell = {
+                  ...cell,
+                  startPosition: newPosition
+                }
+                newStructures.set(cell.id, updatedCell)
+              }
+              
               return newStructures
+            })
+            
+            // Update position map
+            setPositions((prev: PositionMap) => {
+              let newPositions = prev
+              
+              // Update position map for the resized table
+              newPositions = removeStructureFromPositionMap(selectedStructure, newPositions)
+              newPositions = addStructureToPositionMap(updatedStructure, newPositions)
+              
+              // Update position map for removed cells
+              for (const { cell, newPosition } of cellsToRemove) {
+                newPositions = removeStructureFromPositionMap(cell, newPositions)
+                const updatedCell = {
+                  ...cell,
+                  startPosition: newPosition
+                }
+                newPositions = addStructureToPositionMap(updatedCell, newPositions)
+              }
+              
+              return newPositions
             })
             
             // Update selected structure
@@ -1685,7 +2032,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             }
             
             // Update structures map
-            setStructures(prev => {
+            setStructures((prev: StructureMap) => {
               const newStructures = new Map(prev)
               newStructures.set(selectedStructure.id, updatedStructure)
               return newStructures
@@ -1766,12 +2113,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       if (processedStructures.has(key)) continue
 
       let startPosition, endPosition
-      if (structure.type === 'column') {
-        startPosition = endPosition = structure.startPosition
-      } else {
-        startPosition = structure.startPosition
-        endPosition = structure.endPosition
-      }
+      startPosition = structure.startPosition
+      endPosition = getEndPosition(structure.startPosition, structure.dimensions)
       
       if (endPosition.row >= startRow && startPosition.row < endRow &&
           endPosition.col >= startCol && startPosition.col < endCol) {
@@ -1848,17 +2191,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             }}
             onMouseDown={(e) => {
               if (e.button !== 0) return
-              e.preventDefault()
-              e.stopPropagation()
-              setSelectedColumn(null)
-              setIsDraggingStructure(true)
-              setDraggedStructure(structure)
-              setDragOffset({ row: 0, col: 0 })
-              if (!selectedStructure || selectedStructure.id !== structure.id) {
-                selectStructure(structure)
-                setStartEditing(null)
-                setSelectedRange(null)
-              }
+              startStructureDrag(structure, e, 0, 0)
             }}
           />
         )
@@ -1887,17 +2220,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             }}
             onMouseDown={(e) => {
               if (e.button !== 0) return
-              e.preventDefault()
-              e.stopPropagation()
-              setSelectedColumn(null)
-              setIsDraggingStructure(true)
-              setDraggedStructure(structure)
-              setDragOffset({ row: endPosition.row - startPosition.row, col: 0 })
-              if (!selectedStructure || selectedStructure.id !== structure.id) {
-                selectStructure(structure)
-                setStartEditing(null)
-                setSelectedRange(null)
-              }
+              startStructureDrag(structure, e, endPosition.row - startPosition.row, 0)
             }}
           />
         )
@@ -1931,7 +2254,39 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               setSelectedColumn(null)
               setIsDraggingStructure(true)
               setDraggedStructure(structure)
-              setDragOffset({ row: 0, col: 0 })
+              
+              // Calculate precise drag offset based on where user clicked within the structure
+              if (containerRef.current) {
+                const containerRect = containerRef.current.getBoundingClientRect()
+                const relativeX = e.clientX - containerRect.left + scrollLeft
+                const relativeY = e.clientY - containerRect.top + scrollTop
+                
+                // Convert pixel position to cell position
+                let clickRow = 0
+                let clickCol = 0
+                
+                // Calculate click row
+                let currentY = getHeaderHeight()
+                while (clickRow < MAX_ROWS && currentY + getRowHeight(clickRow, rowHeights) < relativeY) {
+                  currentY += getRowHeight(clickRow, rowHeights)
+                  clickRow++
+                }
+                
+                // Calculate click column
+                let currentX = getHeaderWidth()
+                while (clickCol < 26 && currentX + getColumnWidth(clickCol, columnWidths) < relativeX) {
+                  currentX += getColumnWidth(clickCol, columnWidths)
+                  clickCol++
+                }
+                
+                setDragOffset({ 
+                  row: clickRow - structure.startPosition.row, 
+                  col: clickCol - structure.startPosition.col 
+                })
+              } else {
+                setDragOffset({ row: 0, col: 0 })
+              }
+              
               if (!selectedStructure || selectedStructure.id !== structure.id) {
                 selectStructure(structure)
                 setStartEditing(null)
@@ -1965,17 +2320,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             }}
             onMouseDown={(e) => {
               if (e.button !== 0) return
-              e.preventDefault()
-              e.stopPropagation()
-              setSelectedColumn(null)
-              setIsDraggingStructure(true)
-              setDraggedStructure(structure)
-              setDragOffset({ row: 0, col: endPosition.col - startPosition.col })
-              if (!selectedStructure || selectedStructure.id !== structure.id) {
-                selectStructure(structure)
-                setStartEditing(null)
-                setSelectedRange(null)
-              }
+              startStructureDrag(structure, e, 0, endPosition.col - startPosition.col)
             }}
           />
         )
@@ -1986,7 +2331,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           
           // For arrays, only show resize handles for the direction they can expand
           const isArray = structure.type === 'array'
-          const arrayDirection = isArray ? (structure as StructureArray).direction : null
+          const arrayDirection = isArray ? (structure as ArrayStructure).direction : null
           
           // Left edge resize area - show for tables or horizontal arrays
           if (!isArray || arrayDirection === 'horizontal') {
@@ -2150,7 +2495,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           
           // For arrays, only show buttons for the direction they can expand
           const isArray = structure.type === 'array'
-          const arrayDirection = isArray ? (structure as StructureArray).direction : null
+          const arrayDirection = isArray ? (structure as ArrayStructure).direction : null
           
           // Left edge hover area - show for tables or horizontal arrays
           if (startPosition.col > 0 && (!isArray || arrayDirection === 'horizontal')) {
@@ -2269,7 +2614,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         // Calculate the full height of the table for this column
         const tableTop = getRowPosition(table.startPosition.row, rowHeights)
         let tableHeight = 0
-        for (let r = table.startPosition.row; r <= table.endPosition.row; r++) {
+        for (let r = table.startPosition.row; r <= getEndPosition(table.startPosition, table.dimensions).row; r++) {
           tableHeight += getRowHeight(r, rowHeights)
         }
         
@@ -2302,7 +2647,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     // Show name tab when structure is selected (for both named and unnamed structures)
     if (selectedStructure && !(selectedStructure.type === 'cell' && selectedStructure.name === undefined)) { // Exclude cells without names
       const startPosition = selectedStructure.startPosition
-      const endPosition = selectedStructure.endPosition
+      const endPosition = getEndPosition(selectedStructure.startPosition, selectedStructure.dimensions)
 
       const overlayLeft = getColumnPosition(startPosition.col, columnWidths)
       const overlayTop = getRowPosition(startPosition.row, rowHeights)
@@ -2412,7 +2757,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     // Show name tab when structure is hovered (only if it has a name and is not already selected)
     if (hoveredStructure && hoveredStructure.name && (!selectedStructure || hoveredStructure.id !== selectedStructure.id)) {
       const startPosition = hoveredStructure.startPosition
-      const endPosition = hoveredStructure.endPosition
+      const endPosition = getEndPosition(hoveredStructure.startPosition, hoveredStructure.dimensions)
 
       const overlayLeft = getColumnPosition(startPosition.col, columnWidths)
       const overlayTop = getRowPosition(startPosition.row, rowHeights)
@@ -2534,7 +2879,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const isCellCoveredByResizedCell = (row: number, col: number): boolean => {
     for (const [, structure] of structures) {
       if (structure.type === 'cell') {
-        const { startPosition, endPosition } = structure
+        const { startPosition, dimensions } = structure
+        const endPosition = getEndPosition(startPosition, dimensions)
         const rows = endPosition.row - startPosition.row + 1
         const cols = endPosition.col - startPosition.col + 1
         if (rows > 1 || cols > 1) {
@@ -2595,14 +2941,15 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
         const isSelected = selectedRange?.start.row === rowIndex && selectedRange?.start.col === colIndex && selectedRange?.end.row === rowIndex && selectedRange?.end.col === colIndex
         const isInRange = isCellInRange(rowIndex, colIndex, selectedRange)
-        const structure = getStructureAtPosition(rowIndex, colIndex, structures)
+        const structure = getStructureAtPosition(rowIndex, colIndex, positions, structures)
         
         let cellWidth = getColumnWidth(colIndex, columnWidths)
         let cellHeight = getRowHeight(rowIndex, rowHeights)
         
         // If this is a resized cell, calculate the total width and height
         if (structure && structure.type === 'cell') {
-          const { startPosition, endPosition } = structure
+          const { startPosition, dimensions } = structure
+          const endPosition = getEndPosition(startPosition, dimensions)
           const rows = endPosition.row - startPosition.row + 1
           const cols = endPosition.col - startPosition.col + 1
           if ((rows > 1 || cols > 1) && 
@@ -2638,11 +2985,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               height: cellHeight,
               minWidth: cellWidth,
               minHeight: cellHeight,
-              zIndex: structure && structure.type === 'cell' && (structure.endPosition.row > structure.startPosition.row || structure.endPosition.col > structure.startPosition.col) ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
+              zIndex: structure && structure.type === 'cell' && (structure.dimensions.rows > 1 || structure.dimensions.cols > 1) ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
             }}
             onMouseEnter={() => {
               handleMouseEnter(rowIndex, colIndex)
-              if (isTableHeader(rowIndex, colIndex, structures)) {
+              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
                 handleHeaderHover(rowIndex, colIndex, true)
               }
               // Set hovered structure if this cell is part of a structure
@@ -2651,20 +2998,20 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               }
             }}
             onMouseLeave={() => {
-              if (isTableHeader(rowIndex, colIndex, structures)) {
+              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
                 handleHeaderHover(rowIndex, colIndex, false)
               }
               // Clear hovered structure when leaving any cell
               setHoveredStructure(null)
             }}
             onClick={(e) => {
-              if (isTableHeader(rowIndex, colIndex, structures)) {
+              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
                 e.stopPropagation()
                 handleColumnHeaderClick(rowIndex, colIndex)
               }
             }}
             onMouseDown={(e) => {
-              if (isTableHeader(rowIndex, colIndex, structures)) {
+              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
                 e.stopPropagation()
                 handleColumnHeaderMouseDown(rowIndex, colIndex, e)
               } else {
@@ -2675,7 +3022,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             {renderCellContent(
               rowIndex,
               colIndex,
-              getCellValue(rowIndex, colIndex, structures),
+              getCellValue(rowIndex, colIndex, structures, positions),
               isSelected,
               structure,
               isInRange
@@ -2707,12 +3054,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     const structureTop = getRowPosition(structureData.startPosition.row, rowHeights)
     
     let structureWidth = 0
-    for (let c = structureData.startPosition.col; c <= structureData.endPosition.col; c++) {
+    for (let c = structureData.startPosition.col; c <= getEndPosition(structureData.startPosition, structureData.dimensions).col; c++) {
       structureWidth += getColumnWidth(c, columnWidths)
     }
     
     let structureHeight = 0
-    for (let r = structureData.startPosition.row; r <= structureData.endPosition.row; r++) {
+    for (let r = structureData.startPosition.row; r <= getEndPosition(structureData.startPosition, structureData.dimensions).row; r++) {
       structureHeight += getRowHeight(r, rowHeights)
     }
 
@@ -2828,14 +3175,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               top: getRowPosition(dropTarget.row, rowHeights),
               width: (() => {
                 let width = 0
-                for (let c = dropTarget.col; c < dropTarget.col + (draggedStructure.endPosition.col - draggedStructure.startPosition.col + 1); c++) {
+                for (let c = dropTarget.col; c < dropTarget.col + draggedStructure.dimensions.cols; c++) {
                   width += getColumnWidth(c, columnWidths)
                 }
                 return width
               })(),
               height: (() => {
                 let height = 0
-                for (let r = dropTarget.row; r < dropTarget.row + (draggedStructure.endPosition.row - draggedStructure.startPosition.row + 1); r++) {
+                for (let r = dropTarget.row; r < dropTarget.row + draggedStructure.dimensions.rows; r++) {
                   height += getRowHeight(r, rowHeights)
                 }
                 return height

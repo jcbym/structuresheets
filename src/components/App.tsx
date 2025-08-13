@@ -7,7 +7,7 @@ import { ConflictDialog } from './ui/ConflictDialog'
 import { useSpreadsheetState } from '../hooks/useSpreadsheetState'
 import { useCellOperations } from '../hooks/useCellOperations'
 import { useStructureOperations } from '../hooks/useStructureOperations'
-import { moveStructureCells, moveStructurePosition } from '../utils/structureUtils'
+import { moveStructure, removeStructureFromPositionMap, getTableCells, getArrayCells } from '../utils/structureUtils'
 
 export const App: React.FC = () => {
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -18,7 +18,9 @@ export const App: React.FC = () => {
   // Use custom hooks for operations
   const { updateCell } = useCellOperations(
     state.structures, 
-    state.setStructures
+    state.setStructures,
+    state.positions,
+    state.setPositions
   )
   
   const { 
@@ -30,11 +32,111 @@ export const App: React.FC = () => {
   } = useStructureOperations(
     state.structures,
     state.setStructures,
+    state.positions,
+    state.setPositions,
     state.selectedRange,
     state.setSelectedStructure
   )
 
+  // Conflict dialog handlers with proper dependency management
+  const handleConflictClose = React.useCallback(() => {
+    // Clean up drag state without performing move
+    state.setIsDraggingStructure(false)
+    state.setDraggedStructure(null)
+    state.setDragOffset(null)
+    state.setDropTarget(null)
+    state.setShowConflictDialog(false)
+    state.setConflictDialogData(null)
+  }, [
+    state.setIsDraggingStructure,
+    state.setDraggedStructure,
+    state.setDragOffset,
+    state.setDropTarget,
+    state.setShowConflictDialog,
+    state.setConflictDialogData
+  ])
 
+  const handleKeepExisting = React.useCallback(() => {
+    if (state.conflictDialogData && state.conflictDialogData.draggedStructure) {
+      // Keep existing values means cancel the move - delete the dragged structure entirely
+      const newStructures = new Map(state.structures)
+      let newPositions = state.positions
+      
+      // Remove the dragged structure completely
+      const draggedStructure = state.conflictDialogData.draggedStructure
+      newStructures.delete(draggedStructure.id)
+      
+      // Remove from position map
+      newPositions = removeStructureFromPositionMap(draggedStructure, newPositions)
+      
+      // For tables and arrays, also clean up their cell references
+      if ((draggedStructure.type === 'table' || draggedStructure.type === 'array') && 'cellIds' in draggedStructure) {
+        const cellsToRemove: any[] = []
+        
+        if (draggedStructure.type === 'table') {
+          cellsToRemove.push(...getTableCells(draggedStructure.id, state.structures))
+        } else if (draggedStructure.type === 'array') {
+          cellsToRemove.push(...getArrayCells(draggedStructure.id, state.structures))
+        }
+        
+        // Remove individual cell structures
+        for (const cell of cellsToRemove) {
+          newStructures.delete(cell.id)
+          newPositions = removeStructureFromPositionMap(cell, newPositions)
+        }
+      }
+
+      state.setStructures(newStructures)
+      state.setPositions(newPositions)
+      
+      // Clear selection since the structure was deleted
+      state.setSelectedStructure(null)
+    }
+    
+    // Clean up drag state
+    handleConflictClose()
+  }, [
+    state.conflictDialogData,
+    state.structures,
+    state.positions,
+    state.setStructures,
+    state.setPositions,
+    state.setSelectedStructure,
+    handleConflictClose
+  ])
+
+  const handleReplaceWithNew = React.useCallback(() => {
+    if (state.conflictDialogData && state.conflictDialogData.draggedStructure) {
+      // Move structure with new values taking priority
+      const {structures: newStructures, positions: newPositions} = moveStructure(
+        state.conflictDialogData.draggedStructure,
+        state.conflictDialogData.targetPosition,
+        state.structures,
+        state.positions,
+        true
+      )
+
+      state.setStructures(newStructures)
+      state.setPositions(newPositions)
+      
+      // Update selected structure with the moved structure
+      const updatedStructure = newStructures.get(state.conflictDialogData.draggedStructure.id)
+      if (updatedStructure) {
+        state.setSelectedStructure(updatedStructure)
+      }
+    }
+    
+    // Clean up drag state
+    handleConflictClose()
+  }, [
+    state.conflictDialogData,
+    state.structures,
+    state.positions,
+    state.setStructures,
+    state.setPositions,
+    state.setSelectedStructure,
+    handleConflictClose
+  ])
 
   return (
     <div className="flex flex-col h-screen">
@@ -49,6 +151,7 @@ export const App: React.FC = () => {
           <div className="h-full bg-white border border-gray-300 rounded-lg shadow-lg">
             <SpreadsheetGrid
               structures={state.structures}
+              positions={state.positions}
               selectedRange={state.selectedRange}
               selectedStructure={state.selectedStructure}
               selectedColumn={state.selectedColumn}
@@ -79,6 +182,7 @@ export const App: React.FC = () => {
               draggedStructure={state.draggedStructure}
               dragOffset={state.dragOffset}
               dropTarget={state.dropTarget}
+              lastValidDropTarget={state.lastValidDropTarget}
               showConflictDialog={state.showConflictDialog}
               conflictDialogData={state.conflictDialogData}
               setIsResizingStructure={state.setIsResizingStructure}
@@ -87,6 +191,7 @@ export const App: React.FC = () => {
               setStructureResizeStartX={state.setStructureResizeStartX}
               setStructureResizeStartY={state.setStructureResizeStartY}
               setStructures={state.setStructures}
+              setPositions={state.setPositions}
               setSelectedRange={state.setSelectedRange}
               setSelectedStructure={state.setSelectedStructure}
               setSelectedColumn={state.setSelectedColumn}
@@ -113,6 +218,7 @@ export const App: React.FC = () => {
               setDraggedStructure={state.setDraggedStructure}
               setDragOffset={state.setDragOffset}
               setDropTarget={state.setDropTarget}
+              setLastValidDropTarget={state.setLastValidDropTarget}
               setShowConflictDialog={state.setShowConflictDialog}
               setConflictDialogData={state.setConflictDialogData}
               onCellUpdate={updateCell}
@@ -177,76 +283,9 @@ export const App: React.FC = () => {
       {state.showConflictDialog && state.conflictDialogData && (
         <ConflictDialog
           isOpen={state.showConflictDialog}
-          onClose={() => {
-            state.setShowConflictDialog(false)
-            state.setConflictDialogData(null)
-          }}
-          onKeepExisting={() => {
-            // Handle keeping existing values
-            if (state.conflictDialogData && state.draggedStructure) {
-              // Move structure with existing values taking priority
-              const newStructures = moveStructureCells(
-                state.draggedStructure, 
-                state.conflictDialogData.targetPosition, 
-                state.structures, 
-                false // Don't overwrite existing
-              )
-              
-              // Update structure position
-              const updatedStructure = moveStructurePosition(
-                state.draggedStructure, 
-                state.conflictDialogData.targetPosition
-              )
-              const finalStructures = new Map(newStructures)
-              finalStructures.set(updatedStructure.id, updatedStructure)
-              
-              state.setStructures(finalStructures)
-              
-              // Update selected structure
-              state.setSelectedStructure(updatedStructure)
-            }
-            
-            // Clean up drag state
-            state.setIsDraggingStructure(false)
-            state.setDraggedStructure(null)
-            state.setDragOffset(null)
-            state.setDropTarget(null)
-            state.setShowConflictDialog(false)
-            state.setConflictDialogData(null)
-          }}
-          onReplaceWithNew={() => {
-            // Handle replacing with new values
-            if (state.conflictDialogData && state.draggedStructure) {
-              // Move structure with new values taking priority
-              const newStructures = moveStructureCells(
-                state.draggedStructure, 
-                state.conflictDialogData.targetPosition, 
-                state.structures, 
-                true // Overwrite existing
-              )
-              
-              // Update structure position
-              const updatedStructure = moveStructurePosition(
-                state.draggedStructure, 
-                state.conflictDialogData.targetPosition
-              )
-              const finalStructures = new Map(newStructures)
-              finalStructures.set(updatedStructure.id, updatedStructure)
-              
-              state.setStructures(finalStructures)
-              
-              // Update selected structure
-              state.setSelectedStructure(updatedStructure)
-            }
-            
-            // Clean up drag state
-            state.setIsDraggingStructure(false)
-            state.setDraggedStructure(null)
-            state.setDragOffset(null)
-            state.setDropTarget(null)
-            state.setShowConflictDialog(false)
-            state.setConflictDialogData(null)
-          }}
+          onClose={handleConflictClose}
+          onKeepExisting={handleKeepExisting}
+          onReplaceWithNew={handleReplaceWithNew}
           conflictingCells={state.conflictDialogData.conflictingCells}
           targetPosition={state.conflictDialogData.targetPosition}
         />

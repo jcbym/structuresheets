@@ -1,40 +1,18 @@
 import React from 'react'
-import { Structure, Cell, StructureArray, Position } from '../types'
+import { Structure, CellStructure, Position, Dimensions, StructureMap, PositionMap } from '../types'
 import { generateUUID } from '../utils/sheetUtils'
-import { getCellValue, getStructureAtPosition, positionsToDimensions } from '../utils/structureUtils'
+import { getCellValue, positionsToDimensions, addStructureToPositionMap, removeStructureFromPositionMap, getStructureAtPosition, getDimensions, initializeCellIdsFromRange } from '../utils/structureUtils'
 import { MAX_ROWS, MAX_COLS } from '../constants'
 
-const createMultipleCells = (
-  startRow: number,
-  endRow: number,
-  startCol: number,
-  endCol: number,
-  structures: Map<string, Structure>
-) => {
-  const cells: Cell[] = []
-  for (let r = startRow; r <= endRow; r++) {
-    for (let c = startCol; c <= endCol; c++) {
-      if (r < MAX_ROWS && c < MAX_COLS) {
-        cells.push({
-          type: 'cell',
-          id: generateUUID(),
-          startPosition: { row: r, col: c },
-          endPosition: { row: r, col: c },
-          value: getCellValue(r, c, structures)
-        })
-      }
-    }
-  }
-  return cells
-}
-
 export const useStructureOperations = (
-  structures: Map<string, Structure>,
-  setStructures: React.Dispatch<React.SetStateAction<Map<string, Structure>>>,
+  structures: StructureMap,
+  setStructures: React.Dispatch<React.SetStateAction<StructureMap>>,
+  positions: PositionMap,
+  setPositions: React.Dispatch<React.SetStateAction<PositionMap>>,
   selectedRange: {start: Position, end: Position} | null,
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
 ) => {
-  const createStructure = (type: Structure['type'], name: string, startPosition: Position, endPosition: Position) => {
+  const createStructure = (type: Structure['type'], name: string, startPosition: Position, dimensions: Dimensions) => {
     let newStructure: Structure
 
     switch (type) {
@@ -43,68 +21,53 @@ export const useStructureOperations = (
           type: 'cell',
           id: generateUUID(),
           startPosition: startPosition,
-          endPosition: endPosition,
+          dimensions: dimensions,
           name,
           value: ''
         }
         return newStructure
       
       case 'array':
-        const arrayDims = positionsToDimensions(startPosition, endPosition)
-        // const cells = createMultipleCells(row, row + arrayDims.rows - 1, col, col + arrayDims.cols - 1, structures)
         let direction: 'horizontal' | 'vertical';
 
-        if (arrayDims.cols == 1) {
+        if (dimensions.cols == 1) {
           direction = 'vertical'
-        } else if (arrayDims.rows == 1) {
+        } else if (dimensions.rows == 1) {
           direction = 'horizontal'
         } else {
-          console.warn('Invalid array dimensions:', arrayDims)
+          console.warn('Invalid array dimensions:', dimensions)
           return
         }
+
+        const arrayCellIds = initializeCellIdsFromRange(
+          startPosition, dimensions, positions, structures, 'array'
+        ) as (string | null)[]
 
         newStructure = {
           type: 'array',
           id: generateUUID(),
           startPosition: startPosition,
-          endPosition: endPosition,
+          dimensions: dimensions,
           name,
-          cells: [],
-          size: Math.max(arrayDims.rows, arrayDims.cols),
-          direction
+          direction,
+          cellIds: arrayCellIds
         }
         return newStructure
 
       case 'table':
-        const arrays: StructureArray[] = []
-        const tableDims = positionsToDimensions(startPosition, endPosition)
+        const tableCellIds = initializeCellIdsFromRange(
+          startPosition, dimensions, positions, structures, 'table'
+        ) as (string | null)[][]
         
-        // // Create arrays for the rows
-        // for (let r = 0; r < tableDims.rows; r++) {
-        //   const rowCells = createMultipleCells(row + r, row + r, col, col + tableDims.cols - 1, structures)
-          
-        //   arrays.push({
-        //     type: 'array',
-        //     id: generateUUID(),
-        //     startPosition: { row: row + r, col },
-        //     endPosition: { row: row + r, col: col + tableDims.cols - 1 },
-        //     cells: rowCells,
-        //     direction: 'horizontal',
-        //     size: tableDims.cols
-        //   })
-        // }
-
         newStructure = {
           type: 'table',
           id: generateUUID(),
           startPosition: startPosition,
-          endPosition: endPosition,
+          dimensions: dimensions,
           name,
-          arrays,
-          hasHeaderRow: true,
-          hasHeaderCol: false,
-          headerRows: 1,
-          headerCols: 1
+          colHeaderLevels: 1,
+          rowHeaderLevels: 0,
+          cellIds: tableCellIds
         }
         return newStructure
     }
@@ -124,61 +87,62 @@ export const useStructureOperations = (
       return // No selection
     }
 
-    const newStructure = createStructure(type, '', {row: startRow, col: startCol}, {row: endRow, col: endCol})
+    const newStructure = createStructure(type, '', {row: startRow, col: startCol}, getDimensions({row: startRow, col: startCol}, {row: endRow, col: endCol}))
 
     if (!newStructure) return // Invalid structure type or dimensions
 
-    // Set the main structure in structures map
-    setStructures(prev => {
+    // Set the main structure in structures map and update position map
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       newStructures.set(newStructure.id, newStructure)
       
       return newStructures
     })
     
+    // Update position map
+    setPositions(prev => addStructureToPositionMap(newStructure, prev))
+    
     // Select the newly created structure
     setSelectedStructure(newStructure)
-  }, [selectedRange, structures, setStructures, setSelectedStructure])
+  }, [selectedRange, structures, positions, setStructures, setSelectedStructure, setPositions])
 
   // Function to update table header settings
-  const updateTableHeaders = React.useCallback((row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => {
+  const updateTableHeaders = React.useCallback((row: number, col: number, headerRows: number, headerCols: number) => {
     // Find the structure at the given position
-    let targetStructure: Structure | null = null
-    for (const [id, structure] of structures) {
-      if (structure.type === 'table') {
-        const { startPosition, endPosition } = structure
-        if (row >= startPosition.row && row <= endPosition.row &&
-            col >= startPosition.col && col <= endPosition.col) {
-          targetStructure = structure
-          break
-        }
-      }
-    }
+    // let targetStructure: Structure | null = null
+    // for (const [, structure] of structures) {
+    //   if (structure.type === 'table') {
+    //     const { startPosition, endPosition } = structure
+    //     if (row >= startPosition.row && row <= endPosition.row &&
+    //         col >= startPosition.col && col <= endPosition.col) {
+    //       targetStructure = structure
+    //       break
+    //     }
+    //   }
+    // }
     
-    if (targetStructure && targetStructure.type === 'table') {
-      const updatedTable = { 
-        ...targetStructure, 
-        hasHeaderRow, 
-        hasHeaderCol,
-        headerRows: headerRows || 1,
-        headerCols: headerCols || 1
-      }
+    // if (targetStructure && targetStructure.type === 'table') {
+    //   const updatedTable = { 
+    //     ...targetStructure,
+    //     headerRows: headerRows || 1,
+    //     headerCols: headerCols || 0
+    //   }
       
-      setStructures(prev => {
-        const newStructures = new Map(prev)
-        newStructures.set(updatedTable.id, updatedTable)
+    //   setStructures((prev: StructureMap) => {
+    //     const newStructures = new Map(prev)
+    //     newStructures.set(updatedTable.id, updatedTable)
         
-        return newStructures
-      })
-    }
+    //     return newStructures
+    //   })
+    // }
   }, [structures, setStructures])
 
   const getStructureAtPositionSafe = React.useCallback((row: number, col: number) => {
-    return getStructureAtPosition(row, col, structures)
-  }, [structures])
+    return getStructureAtPosition(row, col, positions, structures)
+  }, [positions, structures])
 
   const updateStructureName = React.useCallback((structureId: string, name: string) => {
-    setStructures(prev => {
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       const structure = newStructures.get(structureId)
       if (structure) {
@@ -189,7 +153,7 @@ export const useStructureOperations = (
         // Also update the selected structure if it's the same one
         setSelectedStructure(current => {
           if (current && current.id === structureId) {
-            return updatedStructure
+            return updatedStructure as Structure
           }
           return current
         })
@@ -198,76 +162,113 @@ export const useStructureOperations = (
     })
   }, [setStructures, setSelectedStructure])
 
-  const rotateArray = React.useCallback((arrayId: string) => {
-    setStructures(prev => {
-      const newStructures = new Map(prev)
-      const structure = newStructures.get(arrayId)
+  const rotateArray = React.useCallback((arrayId: string) => { // TODO: Implement array rotation with new model
+    // setStructures((prev: StructureMap) => {
+    //   const newStructures = new Map<string, Structure>(prev)
+    //   const structure = newStructures.get(arrayId)
       
-      if (structure && structure.type === 'array') {
-        const array = structure
-        const { startPosition } = array
-        const newDirection: 'horizontal' | 'vertical' = array.direction === 'horizontal' ? 'vertical' : 'horizontal'
+    //   if (structure && structure.type === 'array') {
+    //     const array = structure
+    //     const { startPosition } = array
+    //     const newDirection: 'horizontal' | 'vertical' = array.direction === 'horizontal' ? 'vertical' : 'horizontal'
         
-        // Calculate new dimensions based on rotation
-        let newEndPosition: { row: number, col: number }
-        let newCells: Cell[] = []
+    //     // Calculate new dimensions based on rotation
+    //     let newEndPosition: { row: number, col: number }
+    //     let newCellIds: string[] = []
         
-        if (newDirection === 'vertical') {
-          // Converting from horizontal to vertical
-          newEndPosition = { 
-            row: startPosition.row + array.size - 1, 
-            col: startPosition.col 
-          }
+    //     if (newDirection === 'vertical') {
+    //       // Converting from horizontal to vertical
+    //       newEndPosition = { 
+    //         row: startPosition.row + array.size - 1, 
+    //         col: startPosition.col 
+    //       }
           
-          // Update cell positions to be vertical
-          newCells = array.cells.map((cell, index) => ({
-            ...cell,
-            startPosition: { row: startPosition.row + index, col: startPosition.col },
-            endPosition: { row: startPosition.row + index, col: startPosition.col }
-          }))
-        } else {
-          // Converting from vertical to horizontal
-          newEndPosition = { 
-            row: startPosition.row, 
-            col: startPosition.col + array.size - 1 
-          }
+    //       // Update cell positions to be vertical - need to update the actual cell structures
+    //       newCellIds = array.cellIds.map((cellId, index) => {
+    //         const cell = newStructures.get(cellId) as CellStructure
+    //         if (cell) {
+    //           const updatedCell = {
+    //             ...cell,
+    //             startPosition: { row: startPosition.row + index, col: startPosition.col },
+    //             endPosition: { row: startPosition.row + index, col: startPosition.col }
+    //           }
+    //           newStructures.set(cellId, updatedCell)
+    //         }
+    //         return cellId
+    //       })
+    //     } else {
+    //       // Converting from vertical to horizontal
+    //       newEndPosition = { 
+    //         row: startPosition.row, 
+    //         col: startPosition.col + array.size - 1 
+    //       }
           
-          // Update cell positions to be horizontal
-          newCells = array.cells.map((cell, index) => ({
-            ...cell,
-            startPosition: { row: startPosition.row, col: startPosition.col + index },
-            endPosition: { row: startPosition.row, col: startPosition.col + index }
-          }))
-        }
+    //       // Update cell positions to be horizontal - need to update the actual cell structures
+    //       newCellIds = array.cellIds.map((cellId, index) => {
+    //         const cell = newStructures.get(cellId) as CellStructure
+    //         if (cell) {
+    //           const updatedCell = {
+    //             ...cell,
+    //             startPosition: { row: startPosition.row, col: startPosition.col + index },
+    //             endPosition: { row: startPosition.row, col: startPosition.col + index }
+    //           }
+    //           newStructures.set(cellId, updatedCell)
+    //         }
+    //         return cellId
+    //       })
+    //     }
         
-        const updatedArray = {
-          ...array,
-          direction: newDirection,
-          endPosition: newEndPosition,
-          cells: newCells
-        }
+    //     const updatedArray = {
+    //       ...array,
+    //       direction: newDirection,
+    //       endPosition: newEndPosition,
+    //       cellIds: newCellIds
+    //     }
         
-        newStructures.set(arrayId, updatedArray)
+    //     newStructures.set(arrayId, updatedArray)
         
-        // Also update the selected structure if it's the same one
-        setSelectedStructure(current => {
-          if (current && current.id === arrayId) {
-            return updatedArray
-          }
-          return current
-        })
-      }
+    //     // Also update the selected structure if it's the same one
+    //     setSelectedStructure(current => {
+    //       if (current && current.id === arrayId) {
+    //         return updatedArray
+    //       }
+    //       return current
+    //     })
+    //   }
       
-      return newStructures
-    })
-  }, [setStructures, setSelectedStructure])
+    //   return newStructures
+    // })
+    
+    // // Update position map when rotating
+    // setPositions(prev => {
+    //   const structure = structures.get(arrayId)
+    //   if (structure) {
+    //     // Remove old positions and add new ones
+    //     let newPositionMap = removeStructureFromPositionMap(structure, prev)
+    //     // Get the updated structure from the structures map after rotation
+    //     const updatedStructure = structures.get(arrayId)
+    //     if (updatedStructure) {
+    //       newPositionMap = addStructureToPositionMap(updatedStructure, newPositionMap)
+    //     }
+    //     return newPositionMap
+    //   }
+    //   return prev
+    // })
+  }, [structures, setStructures, setSelectedStructure, setPositions])
 
   const deleteStructure = React.useCallback((structureId: string) => {
-    setStructures(prev => {
+    const structureToDelete = structures.get(structureId)
+    
+    setStructures((prev: StructureMap) => {
       const newStructures = new Map(prev)
       newStructures.delete(structureId)
       return newStructures
     })
+    
+    // Remove from position map
+    if (structureToDelete) {
+      setPositions(prev => removeStructureFromPositionMap(structureToDelete, prev))
+    }
     
     // Clear selected structure if it was the deleted one
     setSelectedStructure(current => {
@@ -276,7 +277,7 @@ export const useStructureOperations = (
       }
       return current
     })
-  }, [setStructures, setSelectedStructure])
+  }, [structures, setStructures, setPositions, setSelectedStructure])
 
   return {
     createStructure,

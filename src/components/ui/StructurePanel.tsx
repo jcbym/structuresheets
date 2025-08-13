@@ -1,5 +1,5 @@
 import React from 'react'
-import { StructurePanelProps, Table } from '../../types'
+import { StructurePanelProps, TableStructure } from '../../types'
 import { COLUMN_LETTERS } from '../../constants'
 import { getDimensions } from '../../utils/structureUtils'
 
@@ -150,7 +150,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
     )
   }
 
-  const tableStructure = currentStructure?.type === 'table' ? currentStructure as Table : null
+  const tableStructure = currentStructure?.type === 'table' ? currentStructure as TableStructure : null
 
   return currentStructure && (
     <div className="flex-shrink-0 relative">
@@ -262,8 +262,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                           currentStructure.startPosition.col,
                           e.target.checked,
                           tableStructure.hasHeaderCol || false,
-                          tableStructure.headerRows,
-                          tableStructure.headerCols
+                          tableStructure.colHeaderLevels,
+                          tableStructure.rowHeaderLevels
                         )}
                         className="rounded"
                       />
@@ -277,14 +277,14 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                           type="number"
                           min="1"
                           max="10"
-                          value={tableStructure.headerRows || 1}
+                          value={tableStructure.colHeaderLevels || 1}
                           onChange={(e) => onUpdateTableHeaders(
                             currentStructure.startPosition.row,
                             currentStructure.startPosition.col,
                             tableStructure.hasHeaderRow || false,
                             tableStructure.hasHeaderCol || false,
                             parseInt(e.target.value) || 1,
-                            tableStructure.headerCols
+                            tableStructure.rowHeaderLevels
                           )}
                           className="w-16 px-2 py-1 text-xs border rounded"
                         />
@@ -300,8 +300,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                           currentStructure.startPosition.col,
                           tableStructure.hasHeaderRow || false,
                           e.target.checked,
-                          tableStructure.headerRows,
-                          tableStructure.headerCols
+                          tableStructure.colHeaderLevels,
+                          tableStructure.rowHeaderLevels
                         )}
                         className="rounded"
                       />
@@ -315,13 +315,13 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                           type="number"
                           min="1"
                           max="10"
-                          value={tableStructure.headerCols || 1}
+                          value={tableStructure.rowHeaderLevels || 1}
                           onChange={(e) => onUpdateTableHeaders(
                             currentStructure.startPosition.row,
                             currentStructure.startPosition.col,
                             tableStructure.hasHeaderRow || false,
                             tableStructure.hasHeaderCol || false,
-                            tableStructure.headerRows,
+                            tableStructure.colHeaderLevels,
                             parseInt(e.target.value) || 1
                           )}
                           className="w-16 px-2 py-1 text-xs border rounded"

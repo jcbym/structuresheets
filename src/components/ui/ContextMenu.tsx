@@ -50,15 +50,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     if (!selectedStructure || selectedStructure.type !== 'table') return
     
     const table = selectedStructure
-    const newHeaderRows = (table.headerRows || 1) + 1
+    const newHeaderRows = (table.colHeaderLevels || 1) + 1
     
     updateTableHeaders(
       table.startPosition.row,
       table.startPosition.col,
-      true,
-      table.hasHeaderCol || false,
       newHeaderRows,
-      table.headerCols
+      table.rowHeaderLevels
     )
     setContextMenu(null)
   }
@@ -67,14 +65,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     if (!selectedStructure || selectedStructure.type !== 'table') return
     
     const table = selectedStructure
-    const newHeaderCols = (table.headerCols || 1) + 1
+    const newHeaderCols = (table.rowHeaderLevels || 1) + 1
     
     updateTableHeaders(
       table.startPosition.row,
       table.startPosition.col,
-      table.hasHeaderRow || false,
-      true,
-      table.headerRows,
+      table.colHeaderLevels,
       newHeaderCols
     )
     setContextMenu(null)

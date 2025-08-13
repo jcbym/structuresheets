@@ -1,9 +1,11 @@
 import React from 'react'
-import { Position, Structure, SelectionRange, ResizeType } from '../types'
+import { Position, Structure, SelectionRange, ResizeType, StructureMap, PositionMap } from '../types'
+import { buildPositionMapFromStructures } from '../utils/structureUtils'
 
 export const useSpreadsheetState = () => {
   // Individual state hooks for better granular control
-  const [structures, setStructures] = React.useState<Map<string, Structure>>(new Map())
+  const [structures, setStructures] = React.useState<StructureMap>(new Map())
+  const [positions, setPositions] = React.useState<PositionMap>(new Map())
   const [selectedRange, setSelectedRange] = React.useState<SelectionRange | null>(null)
   const [selectedStructure, setSelectedStructure] = React.useState<Structure | null>(null)
   const [selectedColumn, setSelectedColumn] = React.useState<{tableId: string, columnIndex: number} | null>(null)
@@ -34,19 +36,27 @@ export const useSpreadsheetState = () => {
   const [draggedStructure, setDraggedStructure] = React.useState<Structure | null>(null)
   const [dragOffset, setDragOffset] = React.useState<Position | null>(null)
   const [dropTarget, setDropTarget] = React.useState<Position | null>(null)
+  const [lastValidDropTarget, setLastValidDropTarget] = React.useState<Position | null>(null)
   const [showConflictDialog, setShowConflictDialog] = React.useState(false)
   const [conflictDialogData, setConflictDialogData] = React.useState<{
     targetPosition: Position
     conflictingCells: Array<{row: number, col: number, existingValue: string, newValue: string}>
+    draggedStructure: Structure
   } | null>(null)
   const [isDraggingColumn, setIsDraggingColumn] = React.useState(false)
   const [draggedColumn, setDraggedColumn] = React.useState<{tableId: string, columnIndex: number} | null>(null)
   const [columnDragStartX, setColumnDragStartX] = React.useState(0)
   const [columnDropTarget, setColumnDropTarget] = React.useState<{tableId: string, targetColumnIndex: number} | null>(null)
 
+  // Keep position map in sync with structures
+  React.useEffect(() => {
+    setPositions(buildPositionMapFromStructures(structures))
+  }, [structures])
+
   return {
     // State values
     structures,
+    positions,
     selectedRange,
     selectedStructure,
     selectedColumn,
@@ -77,6 +87,7 @@ export const useSpreadsheetState = () => {
     draggedStructure,
     dragOffset,
     dropTarget,
+    lastValidDropTarget,
     showConflictDialog,
     conflictDialogData,
     isDraggingColumn,
@@ -86,6 +97,7 @@ export const useSpreadsheetState = () => {
 
     // State setters
     setStructures,
+    setPositions,
     setSelectedRange,
     setSelectedStructure,
     setSelectedColumn,
@@ -116,6 +128,7 @@ export const useSpreadsheetState = () => {
     setDraggedStructure,
     setDragOffset,
     setDropTarget,
+    setLastValidDropTarget,
     setShowConflictDialog,
     setConflictDialogData,
     setIsDraggingColumn,

@@ -9,58 +9,54 @@ export type Dimensions = {
   cols: number
 }
 
-export type Cell = {
+export type CellStructure = {
   type: 'cell'
   id: string
   startPosition: Position
-  endPosition: Position
+  dimensions: Dimensions
   name?: string
+
   value: string
 }
 
-export type StructureArray = {
+export type ArrayStructure = {
   type: 'array'
   id: string
   startPosition: Position
-  endPosition: Position
+  dimensions: Dimensions
   name?: string
-  cells: Cell[]
-  size: number
+
   direction: 'horizontal' | 'vertical'
+
+  // Values
+  cellIds: (string | null)[] // Array of cell IDs, null for empty cells
 }
 
-export type Column = {
-  type: 'column'
-  id: string
-  startPosition: Position
-  endPosition: Position
-  columnIndex: number
-  name?: string
-}
-
-export type Table = {
+export type TableStructure = {
   type: 'table'
   id: string
   startPosition: Position
-  endPosition: Position
+  dimensions: Dimensions
   name?: string
-  arrays: StructureArray[]
-  hasHeaderRow?: boolean
-  hasHeaderCol?: boolean
-  headerRows?: number
-  headerCols?: number
-  columns?: Column[]
+
+  // Values
+  cellIds: (string | null)[][] // 2D array of cell IDs, null for empty cells
+
+  // Column and row headers
+  colHeaderLevels: number
+  colNames?: { [name: string]: number }
+  colGroups?: { [name: string]: number[] } // Maps group name to array of column indices
+
+  rowHeaderLevels: number
+  rowNames?: { [name: string]: number }
+  rowGroups?: { [name: string]: number[] } // Maps group name to array of row indices
 }
 
-export type MergedCell = {
-  startRow: number
-  startCol: number
-  endRow: number
-  endCol: number
-  value: string
-}
+export type Structure = CellStructure | ArrayStructure | TableStructure
 
-export type Structure = Cell | StructureArray | Table | Column
+// Structure maps
+export type StructureMap = Map<string, Structure> // Maps structure ID to Structure object
+export type PositionMap = Map<string, string[]> // Maps position key (row-col) to array of structure IDs
 
 // Component prop types
 export type ContextMenuProps = {
@@ -70,7 +66,7 @@ export type ContextMenuProps = {
   selectedRange: SelectionRange | null
   selectedStructure: Structure | null
   setContextMenu: React.Dispatch<React.SetStateAction<{x: number, y: number} | null>>
-  updateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
+  updateTableHeaders: (row: number, col: number, headerRows: number, headerCols: number) => void
   createStructureFromToolbar: (type: Structure['type']) => void
   rotateArray: (arrayId: string) => void
   canCreateStructures: boolean
@@ -82,11 +78,11 @@ export type ToolbarProps = {
 }
 
 export type StructurePanelProps = {
-  structures: Map<string, Structure>
+  structures: StructureMap
   selectedStructure: Structure | null
   selectedColumn: {tableId: string, columnIndex: number} | null
   expandedTableColumns: Set<string>
-  onUpdateTableHeaders: (row: number, col: number, hasHeaderRow: boolean, hasHeaderCol: boolean, headerRows?: number, headerCols?: number) => void
+  onUpdateTableHeaders: (row: number, col: number, headerRows: number, headerCols: number) => void
   onSelectColumn: (tableId: string, columnIndex: number) => void
   onToggleTableColumns: (tableKey: string) => void
   onUpdateStructureName: (structureId: string, name: string) => void
