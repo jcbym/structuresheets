@@ -9,35 +9,33 @@ export type Dimensions = {
   cols: number
 }
 
-export type CellStructure = {
-  type: 'cell'
+export interface BaseStructure {
+  type: string
   id: string
   startPosition: Position
   dimensions: Dimensions
   name?: string
+
+  formula?: string
+  formulaValue?: string
+  formulaError?: string
+}
+
+export interface CellStructure extends BaseStructure {
+  type: 'cell'
 
   value: string
 }
 
-export type ArrayStructure = {
+export interface ArrayStructure extends BaseStructure {
   type: 'array'
-  id: string
-  startPosition: Position
-  dimensions: Dimensions
-  name?: string
 
   direction: 'horizontal' | 'vertical'
-
-  // Values
   cellIds: (string | null)[] // Array of cell IDs, null for empty cells
 }
 
-export type TableStructure = {
+export interface TableStructure extends BaseStructure {
   type: 'table'
-  id: string
-  startPosition: Position
-  dimensions: Dimensions
-  name?: string
 
   // Values
   cellIds: (string | null)[][] // 2D array of cell IDs, null for empty cells
@@ -86,6 +84,7 @@ export type StructurePanelProps = {
   onSelectColumn: (tableId: string, columnIndex: number) => void
   onToggleTableColumns: (tableKey: string) => void
   onUpdateStructureName: (structureId: string, name: string) => void
+  onUpdateStructureFormula: (structureId: string, formula: string) => void
   isCollapsed: boolean
   width: number
   onToggleCollapse: () => void

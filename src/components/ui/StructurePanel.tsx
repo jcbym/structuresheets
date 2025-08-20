@@ -1,7 +1,6 @@
 import React from 'react'
 import { StructurePanelProps, TableStructure } from '../../types'
 import { COLUMN_LETTERS } from '../../constants'
-import { getDimensions } from '../../utils/structureUtils'
 
 // Name input component for structures without names
 const NameInput: React.FC<{
@@ -77,6 +76,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   onSelectColumn,
   onToggleTableColumns,
   onUpdateStructureName,
+  onUpdateStructureFormula,
   isCollapsed,
   width,
   onToggleCollapse,
@@ -248,90 +248,6 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                 </button>
               </div>
 
-              {/* Table Header Options */}
-              {tableStructure && (
-                <div className="mb-6">
-                  <h4 className="font-semibold mb-3 text-gray-700">Headers</h4>
-                  <div className="space-y-3">
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={tableStructure.hasHeaderRow || false}
-                        onChange={(e) => onUpdateTableHeaders(
-                          currentStructure.startPosition.row,
-                          currentStructure.startPosition.col,
-                          e.target.checked,
-                          tableStructure.hasHeaderCol || false,
-                          tableStructure.colHeaderLevels,
-                          tableStructure.rowHeaderLevels
-                        )}
-                        className="rounded"
-                      />
-                      <span className="text-sm">Column headers</span>
-                    </label>
-                    
-                    {tableStructure.hasHeaderRow && (
-                      <div className="ml-6 flex items-center space-x-2">
-                        <label className="text-xs text-gray-600">Levels:</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="10"
-                          value={tableStructure.colHeaderLevels || 1}
-                          onChange={(e) => onUpdateTableHeaders(
-                            currentStructure.startPosition.row,
-                            currentStructure.startPosition.col,
-                            tableStructure.hasHeaderRow || false,
-                            tableStructure.hasHeaderCol || false,
-                            parseInt(e.target.value) || 1,
-                            tableStructure.rowHeaderLevels
-                          )}
-                          className="w-16 px-2 py-1 text-xs border rounded"
-                        />
-                      </div>
-                    )}
-                    
-                    <label className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        checked={tableStructure.hasHeaderCol || false}
-                        onChange={(e) => onUpdateTableHeaders(
-                          currentStructure.startPosition.row,
-                          currentStructure.startPosition.col,
-                          tableStructure.hasHeaderRow || false,
-                          e.target.checked,
-                          tableStructure.colHeaderLevels,
-                          tableStructure.rowHeaderLevels
-                        )}
-                        className="rounded"
-                      />
-                      <span className="text-sm">Row headers</span>
-                    </label>
-                    
-                    {tableStructure.hasHeaderCol && (
-                      <div className="ml-6 flex items-center space-x-2">
-                        <label className="text-xs text-gray-600">Levels:</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="10"
-                          value={tableStructure.rowHeaderLevels || 1}
-                          onChange={(e) => onUpdateTableHeaders(
-                            currentStructure.startPosition.row,
-                            currentStructure.startPosition.col,
-                            tableStructure.hasHeaderRow || false,
-                            tableStructure.hasHeaderCol || false,
-                            tableStructure.colHeaderLevels,
-                            parseInt(e.target.value) || 1
-                          )}
-                          className="w-16 px-2 py-1 text-xs border rounded"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
               {/* Table Columns Section */}
               {tableStructure && (
                 <div className="mb-6">
@@ -347,7 +263,7 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                   
                   {expandedTableColumns.has(tableStructure.id) && (
                     <div className="space-y-1 ml-4 max-h-40 overflow-y-auto">
-                      {Array.from({ length: getDimensions(tableStructure).cols }, (_, index) => {
+                      {Array.from({ length: tableStructure.dimensions.cols }, (_, index) => {
                         const columnIndex = tableStructure.startPosition.col + index
                         const columnLetter = COLUMN_LETTERS[columnIndex]
                         const isSelected = selectedColumn?.tableId === tableStructure.id &&
@@ -378,11 +294,21 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                 <div className="space-y-2">
                   <input
                     type="text"
-                    placeholder="Enter formula"
-                    value={""} // placeholder
-                    onChange={() => ""} 
+                    placeholder="Enter formula (e.g., =SUM(A1:C3) or =SUM(arrayName))"
+                    value={currentStructure.formula || ''}
+                    onChange={(e) => onUpdateStructureFormula(currentStructure.id, e.target.value)}
                     className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
+                  {currentStructure.formulaError && (
+                    <div className="text-red-600 text-xs">
+                      Error: {currentStructure.formulaError}
+                    </div>
+                  )}
+                  {currentStructure.formulaValue !== undefined && !currentStructure.formulaError && (
+                    <div className="text-green-600 text-xs">
+                      Result: {String(currentStructure.formulaValue)}
+                    </div>
+                  )}
                 </div>
               </div>
 

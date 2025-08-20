@@ -1,8 +1,9 @@
 import React from 'react'
-import { Structure, CellStructure, Position, Dimensions, StructureMap, PositionMap } from '../types'
+import { Structure, CellStructure, ArrayStructure, TableStructure, Position, Dimensions, StructureMap, PositionMap } from '../types'
 import { generateUUID } from '../utils/sheetUtils'
-import { getCellValue, positionsToDimensions, addStructureToPositionMap, removeStructureFromPositionMap, getStructureAtPosition, getDimensions, initializeCellIdsFromRange } from '../utils/structureUtils'
-import { MAX_ROWS, MAX_COLS } from '../constants'
+import { addStructureToPositionMap, removeStructureFromPositionMap, getStructureAtPosition, getDimensions, initializeCellIdsFromRange } from '../utils/structureUtils'
+import { FormulaEngine } from '../formula/engine'
+import { DependencyManager } from '../formula/dependencyManager'
 
 export const useStructureOperations = (
   structures: StructureMap,
@@ -12,6 +13,138 @@ export const useStructureOperations = (
   selectedRange: {start: Position, end: Position} | null,
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
 ) => {
+  // Create a dependency manager instance
+  const dependencyManagerRef = React.useRef(new DependencyManager());
+  const dependencyManager = dependencyManagerRef.current;
+
+  // Helper function to recalculate a single structure
+  const recalculateStructure = React.useCallback((structureId: string, currentStructures: StructureMap): StructureMap => {
+    const structure = currentStructures.get(structureId);
+    if (!structure || !structure.formula) {
+      return currentStructures;
+    }
+
+    const newStructures = new Map(currentStructures);
+    
+    try {
+      const engine = new FormulaEngine(newStructures, positions);
+      const result = engine.evaluateFormula(structure.formula);
+      
+      let updatedStructure = { ...structure };
+      
+      if (result.kind === 'ERROR') {
+        updatedStructure.formulaError = result.value;
+        updatedStructure.formulaValue = undefined;
+      } else {
+        updatedStructure.formulaError = undefined;
+        
+        // Store the result value for display
+        let displayValue: string;
+        if (result.kind === 'NUMBER') {
+          displayValue = result.value.toString();
+        } else if (result.kind === 'STRING') {
+          displayValue = result.value;
+        } else if (result.kind === 'BOOLEAN') {
+          displayValue = result.value.toString();
+        } else if (result.kind === 'RANGE') {
+          displayValue = `Array[${result.value.length}]`;
+        } else {
+          displayValue = String(result.value);
+        }
+        
+        updatedStructure.formulaValue = displayValue;
+
+        // Write the calculated value back to the structure's cells
+        if (structure.type === 'cell') {
+          (updatedStructure as CellStructure).value = displayValue;
+        } else if (structure.type === 'array' && 'cellIds' in structure) {
+          const arrayStructure = updatedStructure as ArrayStructure;
+          const cellIds = [...arrayStructure.cellIds];
+          
+          if (result.kind === 'RANGE') {
+            const values = result.value;
+            for (let i = 0; i < cellIds.length && i < values.length; i++) {
+              const cellId = cellIds[i];
+              if (cellId) {
+                const cell = newStructures.get(cellId) as CellStructure;
+                if (cell) {
+                  newStructures.set(cellId, {
+                    ...cell,
+                    value: String(values[i])
+                  });
+                }
+              }
+            }
+          } else {
+            for (const cellId of cellIds) {
+              if (cellId) {
+                const cell = newStructures.get(cellId) as CellStructure;
+                if (cell) {
+                  newStructures.set(cellId, {
+                    ...cell,
+                    value: displayValue
+                  });
+                }
+              }
+            }
+          }
+        } else if (structure.type === 'table' && 'cellIds' in structure) {
+          const tableStructure = updatedStructure as TableStructure;
+          const cellIds = [...tableStructure.cellIds];
+          
+          if (result.kind === 'RANGE') {
+            const values = result.value;
+            let valueIndex = 0;
+            
+            for (let row = 0; row < cellIds.length && valueIndex < values.length; row++) {
+              for (let col = 0; col < cellIds[row].length && valueIndex < values.length; col++) {
+                const cellId = cellIds[row][col];
+                if (cellId) {
+                  const cell = newStructures.get(cellId) as CellStructure;
+                  if (cell) {
+                    newStructures.set(cellId, {
+                      ...cell,
+                      value: String(values[valueIndex])
+                    });
+                  }
+                }
+                valueIndex++;
+              }
+            }
+          } else {
+            for (const row of cellIds) {
+              for (const cellId of row) {
+                if (cellId) {
+                  const cell = newStructures.get(cellId) as CellStructure;
+                  if (cell) {
+                    newStructures.set(cellId, {
+                      ...cell,
+                      value: displayValue
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      newStructures.set(structureId, updatedStructure);
+    } catch (error) {
+      const structure = newStructures.get(structureId);
+      if (structure) {
+        const updatedStructure = {
+          ...structure,
+          formulaError: error instanceof Error ? error.message : 'Unknown error',
+          formulaValue: undefined
+        };
+        newStructures.set(structureId, updatedStructure);
+      }
+    }
+    
+    return newStructures;
+  }, [positions]);
+
   const createStructure = (type: Structure['type'], name: string, startPosition: Position, dimensions: Dimensions) => {
     let newStructure: Structure
 
@@ -162,6 +295,125 @@ export const useStructureOperations = (
     })
   }, [setStructures, setSelectedStructure])
 
+  const updateStructureFormula = React.useCallback((structureId: string, formula: string) => {
+    setStructures((prev: StructureMap) => {
+      let newStructures = new Map(prev);
+      const structure = newStructures.get(structureId);
+      
+      if (!structure) {
+        return newStructures;
+      }
+
+      // Remove old formula from dependency manager
+      dependencyManager.removeFormula(structureId);
+
+      // If there's a formula, evaluate it and track dependencies
+      if (formula && formula.trim()) {
+        try {
+          const engine = new FormulaEngine(newStructures, positions);
+          const result = engine.evaluateFormula(formula);
+          const dependencies = engine.getDependencies();
+
+          // Add to dependency manager
+          dependencyManager.addFormula(structureId, formula, dependencies);
+
+          // Create updated structure with formula
+          let updatedStructure: Structure;
+          if (structure.type === 'cell') {
+            updatedStructure = {
+              ...structure,
+              formula: formula,
+              formulaError: undefined,
+              formulaValue: undefined
+            } as CellStructure;
+          } else if (structure.type === 'array') {
+            updatedStructure = {
+              ...structure,
+              formula: formula,
+              formulaError: undefined,
+              formulaValue: undefined
+            } as ArrayStructure;
+          } else if (structure.type === 'table') {
+            updatedStructure = {
+              ...structure,
+              formula: formula,
+              formulaError: undefined,
+              formulaValue: undefined
+            } as TableStructure;
+          } else {
+            return newStructures;
+          }
+
+          newStructures.set(structureId, updatedStructure);
+
+          // Recalculate this structure
+          newStructures = recalculateStructure(structureId, newStructures);
+
+          // Update selected structure
+          setSelectedStructure(current => {
+            if (current && current.id === structureId) {
+              return newStructures.get(structureId) || current;
+            }
+            return current;
+          });
+
+        } catch (error) {
+          // Create updated structure with error
+          const updatedStructure = {
+            ...structure,
+            formula: formula,
+            formulaError: error instanceof Error ? error.message : 'Unknown error',
+            formulaValue: undefined
+          };
+          newStructures.set(structureId, updatedStructure);
+
+          setSelectedStructure(current => {
+            if (current && current.id === structureId) {
+              return updatedStructure;
+            }
+            return current;
+          });
+        }
+      } else {
+        // Remove formula
+        const updatedStructure = {
+          ...structure,
+          formula: undefined,
+          formulaError: undefined,
+          formulaValue: undefined
+        };
+        newStructures.set(structureId, updatedStructure);
+
+        setSelectedStructure(current => {
+          if (current && current.id === structureId) {
+            return updatedStructure;
+          }
+          return current;
+        });
+      }
+
+      return newStructures;
+    });
+  }, [dependencyManager, recalculateStructure, setStructures, setSelectedStructure, positions]);
+
+  // Function to handle cell value changes and trigger recalculation
+  const triggerRecalculation = React.useCallback((changedCells: Array<{row: number, col: number}>) => {
+    const calculationOrder = dependencyManager.getCalculationOrder(changedCells);
+    
+    if (calculationOrder.length > 0) {
+      setStructures(prev => {
+        let newStructures = new Map(prev);
+        
+        // Recalculate structures in dependency order
+        for (const structureId of calculationOrder) {
+          newStructures = recalculateStructure(structureId, newStructures);
+        }
+        
+        return newStructures;
+      });
+    }
+  }, [dependencyManager, recalculateStructure, setStructures]);
+
   const rotateArray = React.useCallback((arrayId: string) => { // TODO: Implement array rotation with new model
     // setStructures((prev: StructureMap) => {
     //   const newStructures = new Map<string, Structure>(prev)
@@ -285,6 +537,8 @@ export const useStructureOperations = (
     updateTableHeaders,
     getStructureAtPositionSafe,
     updateStructureName,
+    updateStructureFormula,
+    triggerRecalculation,
     rotateArray,
     deleteStructure
   }

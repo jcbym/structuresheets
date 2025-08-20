@@ -1,12 +1,13 @@
 import React from 'react'
-import { Structure, CellStructure, ArrayStructure, TableStructure, StructureMap, PositionMap } from '../types'
-import { getCellValue, getStructureAtPosition, addStructureToPositionMap, buildPositionMapFromStructures } from '../utils/structureUtils'
+import { CellStructure, ArrayStructure, TableStructure, StructureMap, PositionMap } from '../types'
+import { getCellValue, getStructureAtPosition, addStructureToPositionMap } from '../utils/structureUtils'
 
 export const useCellOperations = (
   structures: StructureMap,
   setStructures: React.Dispatch<React.SetStateAction<StructureMap>>,
   positions: PositionMap,
-  setPositions: React.Dispatch<React.SetStateAction<PositionMap>>
+  setPositions: React.Dispatch<React.SetStateAction<PositionMap>>,
+  triggerRecalculation?: (changedCells: Array<{row: number, col: number}>) => void
 ) => {
   const updateCell = React.useCallback((row: number, col: number, value: string) => {
     // First, check if this position belongs to a table
@@ -148,7 +149,12 @@ export const useCellOperations = (
         }
       }
     }
-  }, [structures, setStructures, positions, setPositions])
+
+    // Trigger recalculation for any formulas that depend on this cell
+    if (triggerRecalculation) {
+      triggerRecalculation([{ row, col }]);
+    }
+  }, [structures, setStructures, positions, setPositions, triggerRecalculation])
 
   // Helper function to find if a position belongs to a table
   const findTableAtPosition = React.useCallback((row: number, col: number, structures: StructureMap): TableStructure | null => {

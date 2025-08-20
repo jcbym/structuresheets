@@ -3,11 +3,9 @@ import { SpreadsheetGrid } from './spreadsheet/SpreadsheetGrid'
 import { Toolbar } from './ui/Toolbar'
 import { StructurePanel } from './ui/StructurePanel'
 import { ContextMenu } from './ui/ContextMenu'
-import { ConflictDialog } from './ui/ConflictDialog'
 import { useSpreadsheetState } from '../hooks/useSpreadsheetState'
 import { useCellOperations } from '../hooks/useCellOperations'
 import { useStructureOperations } from '../hooks/useStructureOperations'
-import { moveStructure, removeStructureFromPositionMap, getTableCells, getArrayCells } from '../utils/structureUtils'
 
 export const App: React.FC = () => {
   const containerRef = React.useRef<HTMLDivElement>(null)
@@ -15,18 +13,12 @@ export const App: React.FC = () => {
   // Use custom hooks for state management
   const state = useSpreadsheetState()
   
-  // Use custom hooks for operations
-  const { updateCell } = useCellOperations(
-    state.structures, 
-    state.setStructures,
-    state.positions,
-    state.setPositions
-  )
-  
   const { 
     createStructureFromToolbar, 
     updateTableHeaders,
     updateStructureName,
+    updateStructureFormula,
+    triggerRecalculation,
     rotateArray,
     deleteStructure
   } = useStructureOperations(
@@ -38,105 +30,14 @@ export const App: React.FC = () => {
     state.setSelectedStructure
   )
 
-  // Conflict dialog handlers with proper dependency management
-  const handleConflictClose = React.useCallback(() => {
-    // Clean up drag state without performing move
-    state.setIsDraggingStructure(false)
-    state.setDraggedStructure(null)
-    state.setDragOffset(null)
-    state.setDropTarget(null)
-    state.setShowConflictDialog(false)
-    state.setConflictDialogData(null)
-  }, [
-    state.setIsDraggingStructure,
-    state.setDraggedStructure,
-    state.setDragOffset,
-    state.setDropTarget,
-    state.setShowConflictDialog,
-    state.setConflictDialogData
-  ])
-
-  const handleKeepExisting = React.useCallback(() => {
-    if (state.conflictDialogData && state.conflictDialogData.draggedStructure) {
-      // Keep existing values means cancel the move - delete the dragged structure entirely
-      const newStructures = new Map(state.structures)
-      let newPositions = state.positions
-      
-      // Remove the dragged structure completely
-      const draggedStructure = state.conflictDialogData.draggedStructure
-      newStructures.delete(draggedStructure.id)
-      
-      // Remove from position map
-      newPositions = removeStructureFromPositionMap(draggedStructure, newPositions)
-      
-      // For tables and arrays, also clean up their cell references
-      if ((draggedStructure.type === 'table' || draggedStructure.type === 'array') && 'cellIds' in draggedStructure) {
-        const cellsToRemove: any[] = []
-        
-        if (draggedStructure.type === 'table') {
-          cellsToRemove.push(...getTableCells(draggedStructure.id, state.structures))
-        } else if (draggedStructure.type === 'array') {
-          cellsToRemove.push(...getArrayCells(draggedStructure.id, state.structures))
-        }
-        
-        // Remove individual cell structures
-        for (const cell of cellsToRemove) {
-          newStructures.delete(cell.id)
-          newPositions = removeStructureFromPositionMap(cell, newPositions)
-        }
-      }
-
-      state.setStructures(newStructures)
-      state.setPositions(newPositions)
-      
-      // Clear selection since the structure was deleted
-      state.setSelectedStructure(null)
-    }
-    
-    // Clean up drag state
-    handleConflictClose()
-  }, [
-    state.conflictDialogData,
-    state.structures,
-    state.positions,
+  // Use custom hooks for operations
+  const { updateCell } = useCellOperations(
+    state.structures, 
     state.setStructures,
-    state.setPositions,
-    state.setSelectedStructure,
-    handleConflictClose
-  ])
-
-  const handleReplaceWithNew = React.useCallback(() => {
-    if (state.conflictDialogData && state.conflictDialogData.draggedStructure) {
-      // Move structure with new values taking priority
-      const {structures: newStructures, positions: newPositions} = moveStructure(
-        state.conflictDialogData.draggedStructure,
-        state.conflictDialogData.targetPosition,
-        state.structures,
-        state.positions,
-        true
-      )
-
-      state.setStructures(newStructures)
-      state.setPositions(newPositions)
-      
-      // Update selected structure with the moved structure
-      const updatedStructure = newStructures.get(state.conflictDialogData.draggedStructure.id)
-      if (updatedStructure) {
-        state.setSelectedStructure(updatedStructure)
-      }
-    }
-    
-    // Clean up drag state
-    handleConflictClose()
-  }, [
-    state.conflictDialogData,
-    state.structures,
     state.positions,
-    state.setStructures,
     state.setPositions,
-    state.setSelectedStructure,
-    handleConflictClose
-  ])
+    triggerRecalculation
+  )
 
   return (
     <div className="flex flex-col h-screen">
@@ -236,6 +137,7 @@ export const App: React.FC = () => {
           expandedTableColumns={state.expandedTableColumns}
           onUpdateTableHeaders={updateTableHeaders}
           onUpdateStructureName={updateStructureName}
+          onUpdateStructureFormula={updateStructureFormula}
           onSelectColumn={(tableId, columnIndex) => {
             state.setSelectedColumn({ tableId, columnIndex })
             // Also select the table structure when a column is selected
@@ -276,18 +178,6 @@ export const App: React.FC = () => {
           createStructureFromToolbar={createStructureFromToolbar}
           rotateArray={rotateArray}
           canCreateStructures={state.selectedRange !== null}
-        />
-      )}
-
-      {/* Conflict Dialog */}
-      {state.showConflictDialog && state.conflictDialogData && (
-        <ConflictDialog
-          isOpen={state.showConflictDialog}
-          onClose={handleConflictClose}
-          onKeepExisting={handleKeepExisting}
-          onReplaceWithNew={handleReplaceWithNew}
-          conflictingCells={state.conflictDialogData.conflictingCells}
-          targetPosition={state.conflictDialogData.targetPosition}
         />
       )}
     </div>
