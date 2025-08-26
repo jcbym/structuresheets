@@ -1,6 +1,11 @@
 import React from 'react'
-import { CellStructure, ArrayStructure, TableStructure, StructureMap, PositionMap } from '../types'
+import { CellStructure, ArrayStructure, TableStructure, StructureMap, PositionMap, TemplateStructure } from '../types'
 import { getCellValue, getStructureAtPosition, addStructureToPositionMap } from '../utils/structureUtils'
+import { 
+  markCellOverride, 
+  isPositionInTemplate, 
+  convertToRelativePosition 
+} from '../utils/templateOverrides'
 
 export const useCellOperations = (
   structures: StructureMap,
@@ -10,6 +15,62 @@ export const useCellOperations = (
   triggerRecalculation?: (changedCells: Array<{row: number, col: number}>) => void
 ) => {
   const updateCell = React.useCallback((row: number, col: number, value: string) => {
+    // First, check if this position is within a template instance
+    const templateInstance = findTemplateInstanceAtPosition(row, col, structures)
+    
+    if (templateInstance) {
+      // Position is within a template instance - record as override
+      const relativePosition = convertToRelativePosition(
+        { row, col },
+        templateInstance.startPosition
+      )
+      const relativePositionKey = `${relativePosition.row}-${relativePosition.col}`
+      
+      // Update the template instance with the cell override
+      setStructures((prev: StructureMap) => {
+        const newStructures = new Map(prev)
+        const updatedInstance = markCellOverride(templateInstance, relativePositionKey, value)
+        newStructures.set(templateInstance.id, updatedInstance)
+        return newStructures
+      })
+      
+      // Also update any existing cell structure at this position
+      const existingStructure = getStructureAtPosition(row, col, positions, structures)
+      if (existingStructure && existingStructure.type === 'cell') {
+        setStructures((prev: StructureMap) => {
+          const newStructures = new Map(prev)
+          newStructures.set(existingStructure.id, { ...existingStructure, value })
+          return newStructures
+        })
+      } else if (value !== '') {
+        // Create new cell structure if value is not empty
+        const newCellId = `cell-${row}-${col}-${Date.now()}`
+        const newCell: CellStructure = {
+          type: 'cell',
+          id: newCellId,
+          startPosition: { row, col },
+          dimensions: { rows: 1, cols: 1 },
+          value
+        }
+        
+        setStructures((prev: StructureMap) => {
+          const newStructures = new Map(prev)
+          newStructures.set(newCellId, newCell)
+          return newStructures
+        })
+        
+        // Add new cell to position map
+        setPositions(prev => addStructureToPositionMap(newCell, prev))
+      }
+      
+      // Trigger recalculation for any formulas that depend on this cell
+      if (triggerRecalculation) {
+        triggerRecalculation([{ row, col }]);
+      }
+      return
+    }
+
+    // Continue with normal cell update logic if not in template instance
     // First, check if this position belongs to a table
     const tableStructure = findTableAtPosition(row, col, structures)
     
@@ -207,6 +268,19 @@ export const useCellOperations = (
       // For vertical arrays, the index is the row offset
       return arrayRow
     }
+  }, [])
+
+  // Helper function to find if a position is within a template instance
+  const findTemplateInstanceAtPosition = React.useCallback((row: number, col: number, structures: StructureMap): TemplateStructure | null => {
+    for (const [, structure] of structures) {
+      if (structure.type === 'template') {
+        const templateInstance = structure as TemplateStructure
+        if (isPositionInTemplate({ row, col }, templateInstance)) {
+          return templateInstance
+        }
+      }
+    }
+    return null
   }, [])
 
   const getCellValueSafe = React.useCallback((row: number, col: number): string => {

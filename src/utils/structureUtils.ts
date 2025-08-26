@@ -1,6 +1,11 @@
-import { Dimensions, Position, Structure, TableStructure, ArrayStructure, CellStructure, StructureMap, PositionMap } from '../types'
+import { Dimensions, Position, Structure, TableStructure, ArrayStructure, CellStructure, StructureMap, PositionMap, TemplateStructure } from '../types'
 import { DEFAULT_CELL_HEIGHT } from '../constants'
 import { isValidPosition } from './sheetUtils'
+import { 
+  getCellOverride, 
+  isPositionInTemplate, 
+  convertToRelativePosition 
+} from './templateOverrides'
 
 // Key generation utilities
 export const getCellKey = (row: number, col: number): string => `${row}-${col}`
@@ -119,6 +124,23 @@ export const getCellFromTable = (tableId: string, row: number, col: number, stru
 
 // Cell and structure utilities - now computes table cell positions dynamically
 export const getCellValue = (row: number, col: number, structureMap: StructureMap, positionMap: PositionMap): string => {
+  // First check if this position is within a template instance and has an override
+  const templateInstance = findTemplateInstanceAtPosition(row, col, structureMap)
+  if (templateInstance) {
+    const relativePosition = convertToRelativePosition(
+      { row, col },
+      templateInstance.startPosition
+    )
+    const relativePositionKey = `${relativePosition.row}-${relativePosition.col}`
+    const override = getCellOverride(templateInstance, relativePositionKey)
+    
+    if (override !== undefined) {
+      // Return the override value
+      return override
+    }
+    // If no override, continue with normal logic to get template default value
+  }
+
   const structures = getStructuresAtPosition(row, col, positionMap, structureMap)
 
   for (const structure of structures) {
@@ -391,6 +413,16 @@ export const isValidMoveTarget = (
           return false
         }
         
+        // Rule 4: Templates cannot be placed on top of any existing structures
+        if (sourceStructure.type === 'template') {
+          return false
+        }
+        
+        // Rule 5: No structures can be placed on top of templates
+        if (targetStructure.type === 'template') {
+          return false
+        }
+        
         // Allow cells to be placed inside tables/arrays (they will be integrated)
         // This is handled in the existing logic
       }
@@ -503,6 +535,55 @@ export const detectConflicts = (
   return conflicts
 }
 
+// Helper function to find if a position is within a template instance
+const findTemplateInstanceAtPosition = (row: number, col: number, structures: StructureMap): TemplateStructure | null => {
+  for (const [, structure] of structures) {
+    if (structure.type === 'template') {
+      const templateInstance = structure as TemplateStructure
+      if (isPositionInTemplate({ row, col }, templateInstance)) {
+        return templateInstance
+      }
+    }
+  }
+  return null
+}
+
+// Helper function to get all structures within a template
+const getTemplateInternalStructures = (
+  templateStructure: Structure,
+  structures: StructureMap,
+  positions: PositionMap
+): Structure[] => {
+  if (templateStructure.type !== 'template') return []
+  
+  const internalStructures: Structure[] = []
+  const { startPosition, dimensions } = templateStructure
+  const endPosition = getEndPosition(startPosition, dimensions)
+  
+  // Find all structures that are within the template bounds (but not the template itself)
+  for (let row = startPosition.row; row <= endPosition.row; row++) {
+    for (let col = startPosition.col; col <= endPosition.col; col++) {
+      const structuresAtPosition = getStructuresAtPosition(row, col, positions, structures)
+      
+      for (const struct of structuresAtPosition) {
+        if (struct.id !== templateStructure.id && 
+            !internalStructures.some(existing => existing.id === struct.id)) {
+          // Check if this structure is completely within the template bounds
+          const structEnd = getEndPosition(struct.startPosition, struct.dimensions)
+          if (struct.startPosition.row >= startPosition.row &&
+              struct.startPosition.col >= startPosition.col &&
+              structEnd.row <= endPosition.row &&
+              structEnd.col <= endPosition.col) {
+            internalStructures.push(struct)
+          }
+        }
+      }
+    }
+  }
+  
+  return internalStructures
+}
+
 // Simplified structure moving function - consolidates moveCompleteStructure, moveStructureCells, and moveStructurePosition
 export const moveStructure = (
   structure: Structure,
@@ -516,6 +597,18 @@ export const moveStructure = (
   // Remove the old structure from position map
   let newPositions = removeStructureFromPositionMap(structure, positions)
   
+  // For templates, we need to find and move all internal structures
+  let templateInternalStructures: Structure[] = []
+  if (structure.type === 'template') {
+    templateInternalStructures = getTemplateInternalStructures(structure, structures, positions)
+    
+    // Remove all internal structures from their current positions
+    for (const internalStructure of templateInternalStructures) {
+      newStructures.delete(internalStructure.id)
+      newPositions = removeStructureFromPositionMap(internalStructure, newPositions)
+    }
+  }
+
   // For tables and arrays, we need to clean up individual cell structures that were referenced by cellIds
   if ((structure.type === 'table' || structure.type === 'array') && 'cellIds' in structure) {
     const cellsToRemove: CellStructure[] = []
@@ -797,6 +890,121 @@ export const moveStructure = (
     (movedStructure as ArrayStructure).cellIds = newCellIds
   }
   
+  // For templates, move all internal structures to their new positions
+  if (structure.type === 'template' && templateInternalStructures.length > 0) {
+    const deltaRow = targetPosition.row - structure.startPosition.row
+    const deltaCol = targetPosition.col - structure.startPosition.col
+    
+    for (const internalStructure of templateInternalStructures) {
+      // Calculate new position for each internal structure
+      const newInternalPosition: Position = {
+        row: internalStructure.startPosition.row + deltaRow,
+        col: internalStructure.startPosition.col + deltaCol
+      }
+      
+      // Create moved version of the internal structure
+      const movedInternalStructure: Structure = {
+        ...internalStructure,
+        startPosition: newInternalPosition
+      }
+      
+      // If the internal structure is a table or array, we need to update its cellIds
+      if ((internalStructure.type === 'table' || internalStructure.type === 'array') && 'cellIds' in internalStructure) {
+        if (internalStructure.type === 'table') {
+          const tableStructure = internalStructure as TableStructure
+          const newCellIds: (string | null)[][] = []
+          
+          for (let row = 0; row < tableStructure.dimensions.rows; row++) {
+            const rowCells: (string | null)[] = []
+            for (let col = 0; col < tableStructure.dimensions.cols; col++) {
+              const newRow = newInternalPosition.row + row
+              const newCol = newInternalPosition.col + col
+              
+              if (isValidPosition(newRow, newCol)) {
+                // Get the original cell value
+                const originalCellId = tableStructure.cellIds[row]?.[col]
+                const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
+                const originalValue = originalCell?.value || ''
+                
+                // Create new cell structure at target position if there's a value
+                if (originalValue) {
+                  const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
+                  const newCell: CellStructure = {
+                    type: 'cell',
+                    id: newCellId,
+                    startPosition: { row: newRow, col: newCol },
+                    dimensions: { rows: 1, cols: 1 },
+                    value: originalValue
+                  }
+                  newStructures.set(newCellId, newCell)
+                  newPositions = addStructureToPositionMap(newCell, newPositions)
+                  rowCells.push(newCellId)
+                } else {
+                  rowCells.push(null)
+                }
+              } else {
+                rowCells.push(null)
+              }
+            }
+            newCellIds.push(rowCells)
+          }
+          
+          // Update the table structure with new cellIds
+          (movedInternalStructure as TableStructure).cellIds = newCellIds
+        } else if (internalStructure.type === 'array') {
+          const arrayStructure = internalStructure as ArrayStructure
+          const newCellIds: (string | null)[] = []
+          
+          const size = arrayStructure.direction === 'horizontal' ? arrayStructure.dimensions.cols : arrayStructure.dimensions.rows
+          
+          for (let i = 0; i < size; i++) {
+            let newRow, newCol
+            if (arrayStructure.direction === 'horizontal') {
+              newRow = newInternalPosition.row
+              newCol = newInternalPosition.col + i
+            } else {
+              newRow = newInternalPosition.row + i
+              newCol = newInternalPosition.col
+            }
+            
+            if (isValidPosition(newRow, newCol)) {
+              // Get the original cell value
+              const originalCellId = arrayStructure.cellIds[i]
+              const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
+              const originalValue = originalCell?.value || ''
+              
+              // Create new cell structure at target position if there was an original cell
+              if (originalCell || originalValue) {
+                const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
+                const newCell: CellStructure = {
+                  type: 'cell',
+                  id: newCellId,
+                  startPosition: { row: newRow, col: newCol },
+                  dimensions: { rows: 1, cols: 1 },
+                  value: originalValue
+                }
+                newStructures.set(newCellId, newCell)
+                newPositions = addStructureToPositionMap(newCell, newPositions)
+                newCellIds.push(newCellId)
+              } else {
+                newCellIds.push(null)
+              }
+            } else {
+              newCellIds.push(null)
+            }
+          }
+          
+          // Update the array structure with new cellIds
+          (movedInternalStructure as ArrayStructure).cellIds = newCellIds
+        }
+      }
+      
+      // Add the moved internal structure to the new structures map and position map
+      newStructures.set(movedInternalStructure.id, movedInternalStructure)
+      newPositions = addStructureToPositionMap(movedInternalStructure, newPositions)
+    }
+  }
+
   // Update the moved structure in the structures map
   newStructures.set(movedStructure.id, movedStructure)
   

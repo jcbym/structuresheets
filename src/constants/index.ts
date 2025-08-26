@@ -61,3 +61,9 @@ export const ARRAY_COLOR = {
   BACKGROUND: 'bg-blue-50',
   TAB: 'bg-blue-600'
 }
+
+export const TEMPLATE_COLOR = {
+  BORDER: 'border-purple-600',
+  BACKGROUND: 'bg-purple-50',
+  TAB: 'bg-purple-600'
+}

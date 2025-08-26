@@ -50,7 +50,38 @@ export interface TableStructure extends BaseStructure {
   rowGroups?: { [name: string]: number[] } // Maps group name to array of row indices
 }
 
-export type Structure = CellStructure | ArrayStructure | TableStructure
+export interface TemplateStructure extends BaseStructure {
+  type: 'template'
+
+  // Template-specific properties
+  templateId: string
+  sourceTemplateVersion?: number // Track template version for change detection
+  overrides?: TemplateOverrides   // Track instance-specific changes
+}
+
+// Override tracking system
+export interface TemplateOverrides {
+  structures: { [structureId: string]: any } // Flexible partial structure data
+  cellData: { [position: string]: string }
+  deletedStructures: string[] // Structures removed from this instance
+  addedStructures: string[]   // Structures added to this instance
+}
+
+// Template change tracking
+export interface TemplateChanges {
+  structures: {
+    added: Structure[]
+    modified: { [structureId: string]: Partial<Structure> }
+    deleted: string[]
+  }
+  cellData: {
+    added: { [position: string]: string }
+    modified: { [position: string]: string }
+    deleted: string[]
+  }
+}
+
+export type Structure = CellStructure | ArrayStructure | TableStructure | TemplateStructure
 
 // Structure maps
 export type StructureMap = Map<string, Structure> // Maps structure ID to Structure object

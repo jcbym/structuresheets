@@ -15,9 +15,16 @@ import {
   isTableHeader,
   getStructureAtPosition,
   getCellValue,
-  getEndPosition
+  getEndPosition,
+  getCellKey
 } from '../../utils/structureUtils'
-import { COLUMN_LETTERS, Z_INDEX, MAX_ROWS, CELL_COLOR, TABLE_COLOR, ARRAY_COLOR } from '../../constants'
+import { COLUMN_LETTERS, Z_INDEX, MAX_ROWS, CELL_COLOR, TABLE_COLOR, ARRAY_COLOR, TEMPLATE_COLOR } from '../../constants'
+import { 
+  instantiateTemplate as createTemplateInstance, 
+  validateTemplateInstantiation, 
+  addInstantiatedTemplateToStructures 
+} from '../../utils/templateInstantiation'
+import { getTemplateDragState, clearTemplateDragState } from '../../utils/templateDragState'
 
 // Import modular hooks
 import { useGridEventHandlers } from '../../hooks/useGridEventHandlers'
@@ -31,9 +38,26 @@ import {
   renderStructure, 
   renderStructureNameTab, 
   renderAddButton, 
-  renderDraggedStructure,
+  renderGridOverlays,
   StructureRenderProps 
 } from './structureRenderers'
+
+// Import modular cell renderers
+import { 
+  isHeaderCell,
+  getCellClasses,
+  getCellStyle,
+  isCellCoveredByResizedCell,
+  renderCellContent,
+  CellContentProps
+} from './cellRenderers'
+
+// Import modular grid renderers
+import { 
+  renderColumnHeaders,
+  renderRows,
+  GridRenderProps
+} from './gridRenderers'
 
 interface SpreadsheetGridProps {
   // State
@@ -49,6 +73,8 @@ interface SpreadsheetGridProps {
   startEditing: {row: number, col: number} | null
   hoveredHeaderCell: {row: number, col: number} | null
   showAddColumnButton: boolean
+  // Templates for version tracking
+  templates?: any[]
   isResizingSheetHeader: boolean
   sheetHeaderResizeType: 'column' | 'row' | null
   sheetHeaderResizeIndex: number | null
@@ -140,6 +166,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   startEditing,
   hoveredHeaderCell,
   showAddColumnButton,
+  templates,
   isResizingSheetHeader,
   sheetHeaderResizeType,
   sheetHeaderResizeIndex,
@@ -223,6 +250,15 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     x: number
     y: number
   } | null>(null)
+  
+  // State for tracking template drag from sidebar
+  const [isDraggingTemplateFromSidebar, setIsDraggingTemplateFromSidebar] = React.useState(false)
+  const [templateDragData, setTemplateDragData] = React.useState<{
+    templateId: string
+    name: string
+    dimensions: { rows: number, cols: number }
+  } | null>(null)
+  const [templateDropTarget, setTemplateDropTarget] = React.useState<Position | null>(null)
   
   // Cell editing state
   const [cellValues, setCellValues] = React.useState<Map<string, string>>(new Map())
@@ -383,7 +419,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     processSheetHeaderResize: resizeHandlers.handlers.processSheetHeaderResize,
     processStructureResize: resizeHandlers.handlers.processStructureResize,
     selectStructure: dragAndDropHandlers.utils.selectStructure,
-    getCellKey: gridEventHandlers.utils.getCellKey,
+    getCellKey,
     onDeleteStructure
   })
 
@@ -426,7 +462,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   // Use shared selectStructure function from drag and drop handlers
   const selectStructure = dragAndDropHandlers.utils.selectStructure
-  const getCellKey = gridEventHandlers.utils.getCellKey
 
   // Scroll handler
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -435,80 +470,236 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setScrollLeft(target.scrollLeft)
   }
 
-  // Cell rendering utilities
-  const isHeaderCell = (row: number, col: number, structure?: Structure): boolean => {
-    if (!structure || structure.type !== 'table') return false
-    
-    const table = structure as TableStructure
-    const { startPosition } = table
-    const headerRows = table.colHeaderLevels || 0
-    const headerCols = table.rowHeaderLevels || 0
-    
-    // Check if cell is within header row range (column headers)
-    const isInHeaderRows = headerRows > 0 && 
-      row >= startPosition.row && 
-      row < startPosition.row + headerRows
-    
-    // Check if cell is within header column range (row headers)
-    const isInHeaderCols = headerCols > 0 && 
-      col >= startPosition.col && 
-      col < startPosition.col + headerCols
-    
-    return isInHeaderRows || isInHeaderCols
-  }
+  // Function to process template drag movement and calculate drop target
+  const processTemplateDragMove = React.useCallback((e: React.DragEvent) => {
+    if (!isDraggingTemplateFromSidebar || !templateDragData || !containerRef.current) return
 
-  const getCellClasses = (row: number, col: number, structure?: Structure): string => {
-    let classes = 'w-full h-full px-2 py-1 cursor-cell flex items-center'
+    const containerRect = containerRef.current.getBoundingClientRect()
+    const relativeX = e.clientX - containerRect.left + scrollLeft
+    const relativeY = e.clientY - containerRect.top + scrollTop
     
-    if (structure && isHeaderCell(row, col, structure)) {
-      classes += ' font-bold'
+    // Convert pixel position to cell position
+    let targetRow = 0
+    let targetCol = 0
+    
+    // Calculate target row
+    let currentY = getHeaderHeight()
+    while (targetRow < MAX_ROWS && currentY + getRowHeight(targetRow, rowHeights) < relativeY) {
+      currentY += getRowHeight(targetRow, rowHeights)
+      targetRow++
     }
     
-    // Center content for resized cells (merged cells)
-    if (structure && structure.type === 'cell') {
-      const { startPosition, dimensions } = structure
-      if (dimensions.rows > 1 || dimensions.cols > 1) {
-        classes += ' justify-center text-center'
+    // Calculate target column
+    let currentX = getHeaderWidth()
+    while (targetCol < 26 && currentX + getColumnWidth(targetCol, columnWidths) < relativeX) {
+      currentX += getColumnWidth(targetCol, columnWidths)
+      targetCol++
+    }
+    
+    const newDropTarget = { row: targetRow, col: targetCol }
+    
+    // Validate the drop location before updating the visual indicator
+    const validation = validateTemplateInstantiation(
+      templateDragData.templateId,
+      newDropTarget,
+      templateDragData.dimensions,
+      structures,
+      positions
+    )
+    
+    if (validation.isValid) {
+      // Valid location: update the drop target for visual indicator
+      setTemplateDropTarget(newDropTarget)
+    }
+    // For invalid locations: don't update templateDropTarget, so indicator stays at last valid position
+    // This provides consistent behavior with structure dragging
+  }, [isDraggingTemplateFromSidebar, templateDragData, containerRef, scrollLeft, scrollTop, rowHeights, columnWidths, structures, positions])
+
+  // Template drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    // Check if this is a template being dragged
+    if (e.dataTransfer.types.includes('application/template')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      
+      // Try to get the real template data during dragover (works in some browsers)
+      try {
+        const templateData = e.dataTransfer.getData('application/template')
+        if (templateData && templateData.trim() && templateDragData?.templateId === 'unknown') {
+          const { templateId, name, dimensions } = JSON.parse(templateData)
+          setTemplateDragData({ templateId, name, dimensions })
+        }
+      } catch (error) {
+        // If we can't get the data, keep the current data
+      }
+      
+      // Process the drag movement to update drop target
+      processTemplateDragMove(e)
+    }
+  }
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('application/template')) {
+      e.preventDefault()
+      
+      // Set dragging flag immediately
+      setIsDraggingTemplateFromSidebar(true)
+      
+      // Get real template data from shared state (set by sidebar during drag start)
+      const sharedDragState = getTemplateDragState()
+      if (sharedDragState.isDragging && sharedDragState.templateData) {
+        // Use real template dimensions from shared state
+        setTemplateDragData(sharedDragState.templateData)
+      } else {
+        // Try to get the real template data from dataTransfer (may work in some browsers)
+        try {
+          const templateData = e.dataTransfer.getData('application/template')
+          if (templateData && templateData.trim()) {
+            const { templateId, name, dimensions } = JSON.parse(templateData)
+            setTemplateDragData({ templateId, name, dimensions })
+          } else {
+            // Fallback to placeholder if we can't get real data
+            setTemplateDragData({
+              templateId: 'unknown',
+              name: 'Template',
+              dimensions: { rows: 2, cols: 2 }
+            })
+          }
+        } catch (error) {
+          // Fallback to placeholder data
+          setTemplateDragData({
+            templateId: 'unknown',
+            name: 'Template',
+            dimensions: { rows: 2, cols: 2 }
+          })
+        }
       }
     }
-    
-    return classes
   }
 
-  const getCellStyle = (row: number, col: number, structure?: Structure, isInRange?: boolean): React.CSSProperties => {
-    const baseStyle: React.CSSProperties = { 
-      width: '100%', 
-      height: '100%'
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear state if we're actually leaving the grid container
+    if (e.currentTarget === e.target) {
+      setIsDraggingTemplateFromSidebar(false)
+      setTemplateDragData(null)
+      setTemplateDropTarget(null)
     }
-    
-    // Default background
-    baseStyle.backgroundColor = '#F3F4F6'
-    
-    if (structure && isHeaderCell(row, col, structure) && structure.type === 'table') {
-      // Use green background to match table border color
-      return { ...baseStyle, backgroundColor: 'rgba(0, 166, 62, 0.8)' }
-    }
-    
-    // // Add transparent background colors for structure types
-    // if (structure?.type === 'table') {
-    //   return { ...baseStyle, backgroundColor: 'rgba(0, 166, 62, 0.1)' } // Transparent light green
-    // }
-    
-    // if (structure?.type === 'array') {
-    //   return { ...baseStyle, backgroundColor: 'rgba(43, 127, 255, 0.1)' } // Transparent light blue
-    // }
-
-    if (structure?.type === 'cell') {
-      return { ...baseStyle, backgroundColor: 'rgba(255, 255, 255, 1)' }
-    }
-
-    // If cell is in selected range, use blue background
-    if (isInRange) {
-      return { ...baseStyle, backgroundColor: '#dbeafe' } // bg-blue-100 equivalent
-    }
-    
-    return baseStyle
   }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    
+    // Check if this is a template
+    const templateData = e.dataTransfer.getData('application/template')
+    if (templateData) {
+      try {
+        const { templateId, name, dimensions } = JSON.parse(templateData)
+        
+        // Use the calculated drop target from drag over, or fall back to mouse position
+        let targetPosition = templateDropTarget
+        
+        if (!targetPosition && containerRef.current) {
+          // Fallback: Calculate the drop position based on mouse coordinates
+          const containerRect = containerRef.current.getBoundingClientRect()
+          const relativeX = e.clientX - containerRect.left + scrollLeft
+          const relativeY = e.clientY - containerRect.top + scrollTop
+          
+          // Convert pixel position to cell position
+          let targetRow = 0
+          let targetCol = 0
+          
+          // Calculate target row
+          let currentY = getHeaderHeight()
+          while (targetRow < MAX_ROWS && currentY + getRowHeight(targetRow, rowHeights) < relativeY) {
+            currentY += getRowHeight(targetRow, rowHeights)
+            targetRow++
+          }
+          
+          // Calculate target column
+          let currentX = getHeaderWidth()
+          while (targetCol < 26 && currentX + getColumnWidth(targetCol, columnWidths) < relativeX) {
+            currentX += getColumnWidth(targetCol, columnWidths)
+            targetCol++
+          }
+          
+          targetPosition = { row: targetRow, col: targetCol }
+        }
+        
+        // Call template instantiation function with actual template data
+        if (targetPosition) {
+          instantiateTemplate(templateId, targetPosition, dimensions, name)
+        }
+        
+      } catch (error) {
+        console.error('Failed to parse template data:', error)
+        // Show user-friendly error message
+        alert('Failed to drop template. Please try again.')
+      } finally {
+        // Clean up template drag state
+        setIsDraggingTemplateFromSidebar(false)
+        setTemplateDragData(null)
+        setTemplateDropTarget(null)
+      }
+    }
+  }
+
+  // Template instantiation function
+  const instantiateTemplate = (templateId: string, position: Position, dimensions: { rows: number, cols: number }, templateName?: string) => {
+    try {
+      // Validate the drop location
+      const validation = validateTemplateInstantiation(
+        templateId,
+        position,
+        dimensions,
+        structures,
+        positions
+      )
+      
+      if (!validation.isValid) {
+        console.warn('Cannot instantiate template: conflicts detected at positions:', validation.conflicts)
+        // Show user-friendly error message
+        const conflictCount = validation.conflicts.length
+        alert(`Cannot place template here. ${conflictCount} cell${conflictCount > 1 ? 's' : ''} would overlap with existing content.`)
+        return
+      }
+      
+      // Find the current template to get its version
+      const currentTemplate = templates?.find(t => t.id === templateId)
+      const templateVersion = currentTemplate?.version || 1
+      
+      // Create the template instance with current version
+      const instantiationResult = createTemplateInstance(templateId, position, dimensions, templateVersion)
+      
+      // Update the template structure name if provided
+      if (templateName) {
+        instantiationResult.templateStructure.name = templateName
+      }
+      
+      // Add the instantiated template to the structures
+      const { newStructures, newPositions } = addInstantiatedTemplateToStructures(
+        instantiationResult,
+        structures,
+        positions,
+        onCellUpdate
+      )
+      
+      // Update the state
+      setStructures(newStructures)
+      setPositions(newPositions)
+      
+      // Select the newly created template structure
+      selectStructure(instantiationResult.templateStructure)
+      
+      // Success feedback
+      console.log(`Successfully instantiated template "${templateName || templateId}" at position ${position.row}, ${position.col}`)
+      
+    } catch (error) {
+      console.error('Failed to instantiate template:', error)
+      // Show user-friendly error message
+      alert('Failed to create template instance. Please try again.')
+    }
+  }
+
 
   // Sync cell values with structures
   React.useEffect(() => {
@@ -563,7 +754,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }, [startEditing, setStartEditing, getCellKey])
 
-  const renderCellContent = (
+  const renderCell = (
     row: number, 
     col: number, 
     value: string, 
@@ -575,267 +766,30 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     const isEditing = editingCells.has(cellKey)
     const cellValue = cellValues.has(cellKey) ? cellValues.get(cellKey)! : value
 
-    return (
-      <div 
-        className={`w-full h-full relative`}
-        onMouseEnter={() => handleMouseEnter(row, col)}
-        onMouseUp={handleMouseUp}
-        onContextMenu={(e) => handleRightClick(row, col, e)}
-        onDoubleClick={() => handleCellDoubleClick(row, col)}
-        onKeyDown={(e) => handleCellKeyDownGeneral(e, row, col)}
-        tabIndex={isSelected ? 0 : -1}
-      >
-        {isEditing ? (
-          <input
-            type="text"
-            value={cellValue}
-            data-cell-key={cellKey}
-            onChange={(e) => {
-              setCellValues(prev => {
-                const newMap = new Map(prev)
-                newMap.set(cellKey, e.target.value)
-                return newMap
-              })
-            }}
-            onBlur={(e) => handleCellBlur(row, col, e)}
-            onFocus={() => handleCellFocusChange(row, col)}
-            onKeyDown={(e) => handleCellKeyDown(e, row, col)}
-            className="w-full h-full outline-none px-2 py-1"
-            style={{ 
-              minWidth: '80px', 
-              minHeight: '30px',
-              backgroundColor: isInRange ? '#dbeafe' : 'transparent'
-            }}
-            autoFocus
-          />
-        ) : (
-          <div 
-            className={getCellClasses(row, col, structure)}
-            style={getCellStyle(row, col, structure, isInRange)}
-            title={structure?.name ? `${structure.type}: ${structure.name}` : undefined}
-          >
-            {cellValue || '\u00A0'}
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  // Check if a cell position is covered by a resized cell
-  const isCellCoveredByResizedCell = (row: number, col: number): boolean => {
-    for (const [, structure] of structures) {
-      if (structure.type === 'cell') {
-        const { startPosition, dimensions } = structure
-        const endPosition = getEndPosition(startPosition, dimensions)
-        const rows = endPosition.row - startPosition.row + 1
-        const cols = endPosition.col - startPosition.col + 1
-        if (rows > 1 || cols > 1) {
-          // This is a resized cell
-          if (row >= startPosition.row && row < startPosition.row + rows &&
-              col >= startPosition.col && col < startPosition.col + cols &&
-              !(row === startPosition.row && col === startPosition.col)) {
-            // This position is covered by the resized cell (but not the top-left corner)
-            return true
-          }
-        }
-      }
+    const cellContentProps: CellContentProps = {
+      row,
+      col,
+      value,
+      isSelected,
+      structure,
+      isInRange,
+      cellKey,
+      isEditing,
+      cellValue,
+      handleMouseEnter,
+      handleMouseUp,
+      handleRightClick,
+      handleCellDoubleClick,
+      handleCellKeyDownGeneral,
+      handleCellBlur,
+      handleCellFocusChange,
+      handleCellKeyDown,
+      setCellValues
     }
-    return false
+
+    return renderCellContent(cellContentProps)
   }
 
-  // Render column headers
-  const renderColumnHeaders = () => {
-    const headers = []
-    
-    // Empty corner cell
-    headers.push(
-      <div
-        key="corner"
-        className="border border-gray-300 bg-gray-100 font-bold text-center sticky left-0 top-0"
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: getHeaderWidth(),
-          height: getHeaderHeight(),
-          minWidth: getHeaderWidth(),
-          minHeight: getHeaderHeight(),
-          zIndex: Z_INDEX.STICKY_CORNER
-        }}
-      />
-    )
-
-    // Column headers
-    for (let colIndex = startCol; colIndex < endCol; colIndex++) {
-      headers.push(
-        <div
-          key={`col-header-${colIndex}`}
-          className="border border-gray-300 bg-gray-100 font-bold text-center flex items-center justify-center sticky top-0 relative"
-          style={{
-            position: 'absolute',
-            left: getColumnPosition(colIndex, columnWidths),
-            top: 0,
-            width: getColumnWidth(colIndex, columnWidths),
-            height: getHeaderHeight(),
-            minWidth: getColumnWidth(colIndex, columnWidths),
-            minHeight: getHeaderHeight(),
-            zIndex: Z_INDEX.HEADER
-          }}
-        >
-          {COLUMN_LETTERS[colIndex]}
-          {/* Column resize handle */}
-          <div
-            className="absolute right-0 top-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-500"
-            onMouseDown={(e) => handleResizeMouseDown('column', colIndex, e)}
-            style={{
-              marginRight: '-2px',
-              zIndex: Z_INDEX.RESIZE_HANDLE
-            }}
-          />
-        </div>
-      )
-    }
-    return headers
-  }
-
-  // Render visible rows
-  const renderRows = () => {
-    const rows = []
-    for (let rowIndex = startRow; rowIndex < endRow; rowIndex++) {
-      const cells = []
-      
-      // Row header
-      cells.push(
-        <div
-          key={`row-header-${rowIndex}`}
-          className="border border-gray-300 bg-gray-100 font-bold text-center flex items-center justify-center sticky left-0 relative"
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: getRowPosition(rowIndex, rowHeights),
-            width: getHeaderWidth(),
-            height: getRowHeight(rowIndex, rowHeights),
-            minWidth: getHeaderWidth(),
-            minHeight: getRowHeight(rowIndex, rowHeights),
-            zIndex: Z_INDEX.HEADER
-          }}
-        >
-          {rowIndex + 1}
-          {/* Row resize handle */}
-          <div
-            className="absolute bottom-0 left-0 w-full h-1 cursor-row-resize bg-transparent hover:bg-blue-500"
-            onMouseDown={(e) => handleResizeMouseDown('row', rowIndex, e)}
-            style={{
-              marginBottom: '-2px',
-              zIndex: Z_INDEX.RESIZE_HANDLE
-            }}
-          />
-        </div>
-      )
-
-      // Data cells
-      for (let colIndex = startCol; colIndex < endCol; colIndex++) {
-        // Skip cells that are covered by resized cells
-        if (isCellCoveredByResizedCell(rowIndex, colIndex)) {
-          continue
-        }
-
-        const isSelected = selectedRange?.start.row === rowIndex && selectedRange?.start.col === colIndex && selectedRange?.end.row === rowIndex && selectedRange?.end.col === colIndex
-        const isInRange = isCellInRange(rowIndex, colIndex, selectedRange)
-        const structure = getStructureAtPosition(rowIndex, colIndex, positions, structures)
-        
-        let cellWidth = getColumnWidth(colIndex, columnWidths)
-        let cellHeight = getRowHeight(rowIndex, rowHeights)
-        
-        // If this is a resized cell, calculate the total width and height
-        if (structure && structure.type === 'cell') {
-          const { startPosition, dimensions } = structure
-          const endPosition = getEndPosition(startPosition, dimensions)
-          const rows = endPosition.row - startPosition.row + 1
-          const cols = endPosition.col - startPosition.col + 1
-          if ((rows > 1 || cols > 1) && 
-              rowIndex === structure.startPosition.row && 
-              colIndex === structure.startPosition.col) {
-            // This is the top-left corner of a resized cell - calculate total dimensions
-            cellWidth = 0
-            for (let c = 0; c < cols; c++) {
-              cellWidth += getColumnWidth(colIndex + c, columnWidths)
-            }
-            cellHeight = 0
-            for (let r = 0; r < rows; r++) {
-              cellHeight += getRowHeight(rowIndex + r, rowHeights)
-            }
-          }
-        }
-        
-        // Add green column borders for tables (but not individual cell selection borders)
-        let borderClass = 'border border-gray-200'
-        if (structure && structure.type === 'table') {
-          borderClass = `border-l-1 border-r-1 border-t border-b ${TABLE_COLOR.BORDER} border-t-gray-200 border-b-gray-200`
-        }
-
-        cells.push(
-          <div
-            key={`cell-${rowIndex}-${colIndex}`}
-            className={`${borderClass}`}
-            style={{
-              position: 'absolute',
-              left: getColumnPosition(colIndex, columnWidths),
-              top: getRowPosition(rowIndex, rowHeights),
-              width: cellWidth,
-              height: cellHeight,
-              minWidth: cellWidth,
-              minHeight: cellHeight,
-              zIndex: structure && structure.type === 'cell' && (structure.dimensions.rows > 1 || structure.dimensions.cols > 1) ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
-            }}
-            onMouseEnter={() => {
-              handleMouseEnter(rowIndex, colIndex)
-              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
-                handleHeaderHover(rowIndex, colIndex, true)
-              }
-              // Set hovered structure if this cell is part of a structure
-              if (structure) {
-                setHoveredStructure(structure)
-              }
-            }}
-            onMouseLeave={() => {
-              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
-                handleHeaderHover(rowIndex, colIndex, false)
-              }
-              // Clear hovered structure when leaving any cell
-              setHoveredStructure(null)
-            }}
-            onClick={(e) => {
-              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
-                e.stopPropagation()
-                handleColumnHeaderClick(rowIndex, colIndex)
-              }
-            }}
-            onMouseDown={(e) => {
-              if (isTableHeader(rowIndex, colIndex, structures, positions)) {
-                e.stopPropagation()
-                handleColumnHeaderMouseDown(rowIndex, colIndex, e)
-              } else {
-                handleMouseDown(rowIndex, colIndex, e)
-              }
-            }}
-          >
-            {renderCellContent(
-              rowIndex,
-              colIndex,
-              getCellValue(rowIndex, colIndex, structures, positions),
-              isSelected,
-              structure,
-              isInRange
-            )}
-          </div>
-        )
-      }
-
-      rows.push(...cells)
-    }
-    return rows
-  }
 
   // Render structure overlays using modular renderers
   const renderStructureOverlays = () => {
@@ -895,46 +849,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return overlays
   }
 
-  // Render column selection overlays
-  const renderColumnSelectionOverlays = () => {
-    if (!selectedColumn || !selectedColumn.tableId) return []
-
-    const overlays = []
-    const tableStructure = structures.get(selectedColumn.tableId)
-    
-    if (tableStructure && tableStructure.type === 'table') {
-      const table = tableStructure as any
-      const selectedColIndex = table.startPosition.col + selectedColumn.columnIndex
-      
-      if (selectedColIndex >= startCol && selectedColIndex < endCol) {
-        const columnLeft = getColumnPosition(selectedColIndex, columnWidths)
-        const columnWidth = getColumnWidth(selectedColIndex, columnWidths)
-        
-        const tableTop = getRowPosition(table.startPosition.row, rowHeights)
-        let tableHeight = 0
-        for (let r = table.startPosition.row; r <= getEndPosition(table.startPosition, table.dimensions).row; r++) {
-          tableHeight += getRowHeight(r, rowHeights)
-        }
-        
-        overlays.push(
-          <div
-            key={`column-selection-${selectedColIndex}`}
-            className="absolute pointer-events-none border-3 border-green-700"
-            style={{
-              left: columnLeft,
-              top: tableTop,
-              width: columnWidth,
-              height: tableHeight,
-              zIndex: Z_INDEX.STRUCTURE_OVERLAY + 2
-            }}
-            title={`Selected column ${selectedColumn.columnIndex + 1}`}
-          />
-        )
-      }
-    }
-
-    return overlays
-  }
 
   // Render structure name tabs using modular renderers
   const renderStructureNameTabs = () => {
@@ -1040,47 +954,6 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return renderAddButton(renderProps)
   }
 
-  // Render dragged structure overlay
-  const renderDraggedStructure = () => {
-    if (!isDraggingStructure || !dropTarget || !draggedStructure) return null
-
-    const overlayLeft = getColumnPosition(dropTarget.col, columnWidths)
-    const overlayTop = getRowPosition(dropTarget.row, rowHeights)
-    
-    let overlayWidth = 0
-    for (let c = dropTarget.col; c < dropTarget.col + draggedStructure.dimensions.cols; c++) {
-      overlayWidth += getColumnWidth(c, columnWidths)
-    }
-    
-    let overlayHeight = 0
-    for (let r = dropTarget.row; r < dropTarget.row + draggedStructure.dimensions.rows; r++) {
-      overlayHeight += getRowHeight(r, rowHeights)
-    }
-
-    // Use the same border styling as regular structures but with transparency
-    const borderColor = draggedStructure.type === 'cell' ? CELL_COLOR.BORDER :
-                       draggedStructure.type === 'array' ? ARRAY_COLOR.BORDER : TABLE_COLOR.BORDER
-    const borderWidth = 'border-3'
-
-    return (
-      <div
-        className={`absolute ${borderWidth} ${borderColor} pointer-events-none`}
-        style={{
-          left: overlayLeft,
-          top: overlayTop,
-          width: overlayWidth,
-          height: overlayHeight,
-          zIndex: Z_INDEX.STRUCTURE_OVERLAY + 10,
-          opacity: 0.7,
-          backgroundColor: draggedStructure.type === 'cell' ? 'rgba(156, 163, 175, 0.3)' :
-                           draggedStructure.type === 'array' ? 'rgba(59, 130, 246, 0.3)' : 
-                           'rgba(34, 197, 94, 0.3)',
-          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
-        }}
-        title={`Moving ${draggedStructure.type}${draggedStructure.name ? `: ${draggedStructure.name}` : ''}`}
-      />
-    )
-  }
 
   return (
     <div 
@@ -1088,6 +961,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       className="overflow-auto h-full w-full rounded-lg"
       style={{ position: 'relative' }}
       onScroll={handleScroll}
+      onDragOver={handleDragOver}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       {/* Virtual container to enable scrolling */}
       <div
@@ -1098,22 +975,70 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         }}
       >
         {/* Column headers */}
-        {renderColumnHeaders()}
+        {renderColumnHeaders({
+          startRow,
+          endRow,
+          startCol,
+          endCol,
+          columnWidths,
+          rowHeights,
+          structures,
+          positions,
+          selectedRange,
+          handleResizeMouseDown,
+          handleMouseEnter,
+          handleHeaderHover,
+          handleColumnHeaderClick,
+          handleColumnHeaderMouseDown,
+          handleMouseDown,
+          setHoveredStructure,
+          renderCell
+        })}
         
         {/* Rows and cells */}
-        {renderRows()}
+        {renderRows({
+          startRow,
+          endRow,
+          startCol,
+          endCol,
+          columnWidths,
+          rowHeights,
+          structures,
+          positions,
+          selectedRange,
+          handleResizeMouseDown,
+          handleMouseEnter,
+          handleHeaderHover,
+          handleColumnHeaderClick,
+          handleColumnHeaderMouseDown,
+          handleMouseDown,
+          setHoveredStructure,
+          renderCell
+        })}
         
         {/* Structure overlays */}
         {renderStructureOverlays()}
         
-        {/* Column selection overlays */}
-        {renderColumnSelectionOverlays()}
+        {/* Grid overlays (column selections, drag indicators, etc.) */}
+        {renderGridOverlays(
+          columnWidths,
+          rowHeights,
+          startRow,
+          endRow,
+          startCol,
+          endCol,
+          selectedColumn,
+          structures,
+          isDraggingStructure,
+          draggedStructure,
+          dropTarget,
+          isDraggingTemplateFromSidebar,
+          templateDropTarget,
+          templateDragData
+        )}
         
         {/* Structure name tabs */}
         {renderStructureNameTabs()}
-        
-        {/* Dragged structure overlay */}
-        {renderDraggedStructure()}
         
         {/* Add buttons overlay */}
         {renderAddButtons()}

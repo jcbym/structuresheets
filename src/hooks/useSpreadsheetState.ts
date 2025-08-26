@@ -1,6 +1,7 @@
 import React from 'react'
 import { Position, Structure, SelectionRange, ResizeType, StructureMap, PositionMap } from '../types'
 import { buildPositionMapFromStructures } from '../utils/structureUtils'
+import { Template } from '../components/ui/TemplatesSidebar'
 
 export const useSpreadsheetState = () => {
   // Individual state hooks for better granular control
@@ -48,10 +49,24 @@ export const useSpreadsheetState = () => {
   const [columnDragStartX, setColumnDragStartX] = React.useState(0)
   const [columnDropTarget, setColumnDropTarget] = React.useState<{tableId: string, targetColumnIndex: number} | null>(null)
 
+  // Template-related state
+  const [templates, setTemplates] = React.useState<Template[]>([])
+  const [templatesSidebarCollapsed, setTemplatesSidebarCollapsed] = React.useState(false)
+  const [templatesSidebarWidth, setTemplatesSidebarWidth] = React.useState(280)
+  const [isEditingTemplate, setIsEditingTemplate] = React.useState(false)
+  const [currentTemplate, setCurrentTemplate] = React.useState<Template | null>(null)
+  const [templateStructures, setTemplateStructures] = React.useState<StructureMap>(new Map())
+  const [templatePositions, setTemplatePositions] = React.useState<PositionMap>(new Map())
+
   // Keep position map in sync with structures
   React.useEffect(() => {
     setPositions(buildPositionMapFromStructures(structures))
   }, [structures])
+
+  // Keep template position map in sync with template structures
+  React.useEffect(() => {
+    setTemplatePositions(buildPositionMapFromStructures(templateStructures))
+  }, [templateStructures])
 
   return {
     // State values
@@ -95,6 +110,15 @@ export const useSpreadsheetState = () => {
     columnDragStartX,
     columnDropTarget,
 
+    // Template state values
+    templates,
+    templatesSidebarCollapsed,
+    templatesSidebarWidth,
+    isEditingTemplate,
+    currentTemplate,
+    templateStructures,
+    templatePositions,
+
     // State setters
     setStructures,
     setPositions,
@@ -135,5 +159,14 @@ export const useSpreadsheetState = () => {
     setDraggedColumn,
     setColumnDragStartX,
     setColumnDropTarget,
+
+    // Template state setters
+    setTemplates,
+    setTemplatesSidebarCollapsed,
+    setTemplatesSidebarWidth,
+    setIsEditingTemplate,
+    setCurrentTemplate,
+    setTemplateStructures,
+    setTemplatePositions,
   }
 }

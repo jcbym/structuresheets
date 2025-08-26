@@ -1,6 +1,6 @@
 import React from 'react'
 import { Structure, StructureMap, PositionMap } from '../types'
-import { getStructureAtPosition, isTableHeader } from '../utils/structureUtils'
+import { getStructureAtPosition, isTableHeader, getCellKey } from '../utils/structureUtils'
 import { getNextCell } from '../utils/sheetUtils'
 import { MAX_ROWS } from '../constants'
 
@@ -37,9 +37,6 @@ export const useGridEventHandlers = ({
   setCellValues,
   onCellUpdate
 }: GridEventHandlersProps) => {
-
-  // Cell utilities
-  const getCellKey = (row: number, col: number) => `${row}-${col}`
 
   // Cell focus handler
   const handleCellFocus = React.useCallback((row: number, col: number) => {

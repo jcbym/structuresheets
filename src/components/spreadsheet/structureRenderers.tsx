@@ -1,5 +1,5 @@
 import React from 'react'
-import { Structure, CellStructure, TableStructure, ArrayStructure, Position } from '../../types'
+import { Structure, CellStructure, TableStructure, ArrayStructure, TemplateStructure, Position } from '../../types'
 import { 
   getColumnPosition, 
   getRowPosition, 
@@ -7,7 +7,7 @@ import {
   getRowHeight
 } from '../../utils/sheetUtils'
 import { getEndPosition } from '../../utils/structureUtils'
-import { Z_INDEX, MAX_ROWS, CELL_COLOR, TABLE_COLOR, ARRAY_COLOR } from '../../constants'
+import { Z_INDEX, MAX_ROWS, CELL_COLOR, TABLE_COLOR, ARRAY_COLOR, TEMPLATE_COLOR } from '../../constants'
 
 // Types for rendering props
 export interface StructureRenderProps {
@@ -109,7 +109,8 @@ export function isStructureVisible(
  */
 export function getStructureBorderStyle(structure: Structure, isSelected: boolean) {
   const borderColor = structure.type === 'cell' ? CELL_COLOR.BORDER :
-                     structure.type === 'array' ? ARRAY_COLOR.BORDER : TABLE_COLOR.BORDER
+                     structure.type === 'array' ? ARRAY_COLOR.BORDER : 
+                     structure.type === 'template' ? TEMPLATE_COLOR.BORDER : TABLE_COLOR.BORDER
   const borderWidth = isSelected ? 'border-3' : structure.type === 'cell' ? '' : 'border-2'
   
   return { borderColor, borderWidth }
@@ -249,6 +250,45 @@ export function renderArrayStructure(props: StructureRenderProps): React.ReactEl
   if (isSelected) {
     overlays.push(...renderArrayAddButtonHoverAreas(props, layout, arrayStructure.direction))
   }
+  
+  return overlays
+}
+
+/**
+ * Render template structure overlays
+ */
+export function renderTemplateStructure(props: StructureRenderProps): React.ReactElement[] {
+  const { structure } = props
+  const templateStructure = structure as TemplateStructure
+  
+  if (!isStructureVisible(structure, props.startRow, props.endRow, props.startCol, props.endCol)) {
+    return []
+  }
+  
+  const overlays = []
+  const layout = calculateStructureLayout(structure, props.columnWidths, props.rowHeights)
+  const isSelected = props.selectedStructure?.id === structure.id
+  const { borderColor, borderWidth } = getStructureBorderStyle(structure, isSelected)
+  
+  // Main border overlay
+  overlays.push(
+    <div
+      key={`template-overlay-${structure.id}`}
+      className={`absolute ${borderWidth} ${borderColor}`}
+      style={{
+        left: layout.left,
+        top: layout.top,
+        width: layout.width,
+        height: layout.height,
+        zIndex: isSelected ? Z_INDEX.STRUCTURE_OVERLAY + 1 : Z_INDEX.STRUCTURE_OVERLAY,
+        pointerEvents: 'none'
+      }}
+      title={structure.name ? `${structure.type}: ${structure.name}` : structure.type}
+    />
+  )
+  
+  // Add interactive border areas and resize handles
+  overlays.push(...renderStructureInteractionAreas(props, layout))
   
   return overlays
 }
@@ -824,9 +864,11 @@ export function renderStructureNameTab(props: StructureRenderProps): React.React
   
   const tabBgColor = structure.type === 'cell' ? (isSelected ? CELL_COLOR.TAB : 'bg-gray-500') :
                     structure.type === 'array' ? (isSelected ? ARRAY_COLOR.TAB : 'bg-blue-500') : 
+                    structure.type === 'template' ? (isSelected ? TEMPLATE_COLOR.TAB : 'bg-purple-500') :
                     (isSelected ? TABLE_COLOR.TAB : 'bg-green-600')
   const borderColor = structure.type === 'cell' ? (isSelected ? CELL_COLOR.BORDER : 'border-gray-500') :
                      structure.type === 'array' ? (isSelected ? ARRAY_COLOR.BORDER : 'border-blue-500') : 
+                     structure.type === 'template' ? (isSelected ? TEMPLATE_COLOR.BORDER : 'border-purple-500') :
                      (isSelected ? TABLE_COLOR.BORDER : 'border-green-600')
 
   return (
@@ -995,7 +1037,8 @@ export function renderDraggedStructure(props: StructureRenderProps): React.React
 
   // Use the same border styling as regular structures but with transparency
   const borderColor = props.draggedStructure.type === 'cell' ? CELL_COLOR.BORDER :
-                     props.draggedStructure.type === 'array' ? ARRAY_COLOR.BORDER : TABLE_COLOR.BORDER
+                     props.draggedStructure.type === 'array' ? ARRAY_COLOR.BORDER : 
+                     props.draggedStructure.type === 'template' ? TEMPLATE_COLOR.BORDER : TABLE_COLOR.BORDER
   const borderWidth = 'border-3'
 
   return (
@@ -1010,12 +1053,148 @@ export function renderDraggedStructure(props: StructureRenderProps): React.React
         opacity: 0.7,
         backgroundColor: props.draggedStructure.type === 'cell' ? 'rgba(156, 163, 175, 0.3)' :
                          props.draggedStructure.type === 'array' ? 'rgba(59, 130, 246, 0.3)' : 
+                         props.draggedStructure.type === 'template' ? 'rgba(147, 51, 234, 0.3)' :
                          'rgba(34, 197, 94, 0.3)',
         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
       }}
       title={`Moving ${props.draggedStructure.type}${props.draggedStructure.name ? `: ${props.draggedStructure.name}` : ''}`}
     />
   )
+}
+
+/**
+ * Render template drag indicator overlay
+ */
+export function renderTemplateDragIndicator(
+  columnWidths: Map<number, number>,
+  rowHeights: Map<number, number>,
+  isDraggingTemplateFromSidebar: boolean,
+  templateDropTarget: Position | null,
+  templateDragData: {
+    templateId: string
+    name: string
+    dimensions: { rows: number, cols: number }
+  } | null
+): React.ReactElement | null {
+  if (!isDraggingTemplateFromSidebar || !templateDropTarget || !templateDragData) return null
+
+  const overlayLeft = getColumnPosition(templateDropTarget.col, columnWidths)
+  const overlayTop = getRowPosition(templateDropTarget.row, rowHeights)
+  
+  let overlayWidth = 0
+  for (let c = templateDropTarget.col; c < templateDropTarget.col + templateDragData.dimensions.cols; c++) {
+    overlayWidth += getColumnWidth(c, columnWidths)
+  }
+  
+  let overlayHeight = 0
+  for (let r = templateDropTarget.row; r < templateDropTarget.row + templateDragData.dimensions.rows; r++) {
+    overlayHeight += getRowHeight(r, rowHeights)
+  }
+
+  return (
+    <div
+      className={`absolute border-3 ${TEMPLATE_COLOR.BORDER} pointer-events-none`}
+      style={{
+        left: overlayLeft,
+        top: overlayTop,
+        width: overlayWidth,
+        height: overlayHeight,
+        zIndex: Z_INDEX.STRUCTURE_OVERLAY + 10,
+        opacity: 0.7,
+        backgroundColor: 'rgba(147, 51, 234, 0.3)',
+        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+      }}
+      title={`Dropping template: ${templateDragData.name}`}
+    />
+  )
+}
+
+/**
+ * Render all grid overlays that are not structure-specific
+ */
+export function renderGridOverlays(
+  columnWidths: Map<number, number>,
+  rowHeights: Map<number, number>,
+  startRow: number,
+  endRow: number,
+  startCol: number,
+  endCol: number,
+  selectedColumn: {tableId: string, columnIndex: number} | null,
+  structures: Map<string, Structure>,
+  isDraggingStructure: boolean,
+  draggedStructure: Structure | null,
+  dropTarget: Position | null,
+  isDraggingTemplateFromSidebar: boolean,
+  templateDropTarget: Position | null,
+  templateDragData: {
+    templateId: string
+    name: string
+    dimensions: { rows: number, cols: number }
+  } | null
+): React.ReactElement[] {
+  const overlays = []
+
+  // Column selection overlays
+  if (selectedColumn?.tableId) {
+    const tableStructure = structures.get(selectedColumn.tableId)
+    
+    if (tableStructure && tableStructure.type === 'table') {
+      const table = tableStructure as TableStructure
+      const selectedColIndex = table.startPosition.col + selectedColumn.columnIndex
+      
+      if (selectedColIndex >= startCol && selectedColIndex < endCol) {
+        const columnLeft = getColumnPosition(selectedColIndex, columnWidths)
+        const columnWidth = getColumnWidth(selectedColIndex, columnWidths)
+        
+        const tableTop = getRowPosition(table.startPosition.row, rowHeights)
+        let tableHeight = 0
+        for (let r = table.startPosition.row; r <= getEndPosition(table.startPosition, table.dimensions).row; r++) {
+          tableHeight += getRowHeight(r, rowHeights)
+        }
+        
+        overlays.push(
+          <div
+            key={`column-selection-${selectedColIndex}`}
+            className="absolute pointer-events-none border-3 border-green-700"
+            style={{
+              left: columnLeft,
+              top: tableTop,
+              width: columnWidth,
+              height: tableHeight,
+              zIndex: Z_INDEX.STRUCTURE_OVERLAY + 2
+            }}
+            title={`Selected column ${selectedColumn.columnIndex + 1}`}
+          />
+        )
+      }
+    }
+  }
+
+  // Dragged structure overlay
+  if (isDraggingStructure && dropTarget && draggedStructure) {
+    const dragProps = {
+      isDraggingStructure,
+      dropTarget,
+      draggedStructure,
+      columnWidths,
+      rowHeights
+    } as any // Simplified props for drag overlay
+    
+    const dragOverlay = renderDraggedStructure(dragProps)
+    if (dragOverlay) overlays.push(dragOverlay)
+  }
+
+  // Template drag indicator overlay
+  const templateOverlay = renderTemplateDragIndicator(
+    columnWidths,
+    rowHeights,
+    isDraggingTemplateFromSidebar,
+    templateDropTarget,
+    templateDragData
+  )
+  if (templateOverlay) overlays.push(templateOverlay)
+
+  return overlays
 }
 
 // =============================================================================
@@ -1035,6 +1214,8 @@ export function renderStructure(props: StructureRenderProps): React.ReactElement
       return renderTableStructure(props)
     case 'array':
       return renderArrayStructure(props)
+    case 'template':
+      return renderTemplateStructure(props)
     default:
       console.warn(`Unknown structure type: ${(structure as any).type}`)
       return []
