@@ -20,6 +20,10 @@ interface GlobalEventHandlersProps {
   isResizingSheetHeader: boolean
   isResizingStructure: boolean
   
+  // Cell selection drag state
+  isDragging: boolean
+  dragStart: {row: number, col: number} | null
+  
   // Selection state
   selectedRange: {start: {row: number, col: number}, end: {row: number, col: number}} | null
   selectedColumn: {tableId: string, columnIndex: number} | null
@@ -62,6 +66,7 @@ interface GlobalEventHandlersProps {
   
   // External processors
   processStructureDragMove: (e: MouseEvent) => void
+  processCellRangeSelection: (e: MouseEvent, isDragging: boolean, dragStart: {row: number, col: number} | null) => void
   processColumnDragMove: (e: MouseEvent) => void
   processSheetHeaderResize: (e: MouseEvent) => void
   processStructureResize: (e: MouseEvent) => void
@@ -83,6 +88,8 @@ export const useGlobalEventHandlers = ({
   columnDropTarget,
   isResizingSheetHeader,
   isResizingStructure,
+  isDragging,
+  dragStart,
   selectedRange,
   selectedColumn,
   selectedStructure,
@@ -114,6 +121,7 @@ export const useGlobalEventHandlers = ({
   setEditingCells,
   setCellValues,
   processStructureDragMove,
+  processCellRangeSelection,
   processColumnDragMove,
   processSheetHeaderResize,
   processStructureResize,
@@ -127,6 +135,9 @@ export const useGlobalEventHandlers = ({
     // Handle structure dragging
     processStructureDragMove(e)
     
+    // Handle cell range selection dragging
+    processCellRangeSelection(e, isDragging, dragStart)
+    
     // Handle sheet header resizing
     processSheetHeaderResize(e)
     
@@ -137,6 +148,9 @@ export const useGlobalEventHandlers = ({
     processStructureResize(e)
   }, [
     processStructureDragMove,
+    processCellRangeSelection,
+    isDragging,
+    dragStart,
     processSheetHeaderResize, 
     processColumnDragMove,
     processStructureResize
@@ -182,11 +196,11 @@ export const useGlobalEventHandlers = ({
               newStructures.set(newCellId, newCell)
               newPositions = addStructureToPositionMap(newCell, newPositions)
               
-              // Update the table's cellIds to reference the new cell
+              // Update the table's itemIds to reference the new cell
               const updatedTable = { ...table }
-              const newCellIds = updatedTable.cellIds.map(row => [...row]) // Deep copy
+              const newCellIds = updatedTable.itemIds.map(row => [...row]) // Deep copy
               newCellIds[tableRow][tableCol] = newCellId
-              updatedTable.cellIds = newCellIds
+              updatedTable.itemIds = newCellIds
               
               newStructures.set(table.id, updatedTable)
               
@@ -215,7 +229,7 @@ export const useGlobalEventHandlers = ({
             if (arrayRow >= 0 && arrayRow < array.dimensions.rows && 
                 arrayCol >= 0 && arrayCol < array.dimensions.cols) {
               
-              // Calculate the index in the array's cellIds
+              // Calculate the index in the array's itemIds
               let arrayIndex: number
               if (array.direction === 'horizontal') {
                 arrayIndex = arrayCol
@@ -224,7 +238,7 @@ export const useGlobalEventHandlers = ({
               }
               
               // Ensure the index is valid
-              if (arrayIndex >= 0 && arrayIndex < array.cellIds.length) {
+              if (arrayIndex >= 0 && arrayIndex < array.itemIds.length) {
                 // Remove the dragged cell from structures and positions
                 const newStructures = new Map(structures)
                 let newPositions = removeStructureFromPositionMap(draggedStructure, positions)
@@ -244,11 +258,11 @@ export const useGlobalEventHandlers = ({
                 newStructures.set(newCellId, newCell)
                 newPositions = addStructureToPositionMap(newCell, newPositions)
                 
-                // Update the array's cellIds to reference the new cell
+                // Update the array's itemIds to reference the new cell
                 const updatedArray = { ...array }
-                const newCellIds = [...updatedArray.cellIds] // Copy array
+                const newCellIds = [...updatedArray.itemIds] // Copy array
                 newCellIds[arrayIndex] = newCellId
-                updatedArray.cellIds = newCellIds
+                updatedArray.itemIds = newCellIds
                 
                 newStructures.set(array.id, updatedArray)
                 
@@ -380,114 +394,6 @@ export const useGlobalEventHandlers = ({
     setLastValidDropTarget
   ])
 
-  // Global keyboard handler for merged cell creation and column header editing
-  const handleGlobalKeyDown = React.useCallback((e: KeyboardEvent) => {
-    // 1. Handle merged cell creation by typing on a selected range
-    if (
-      selectedRange &&
-      selectedRange.start && selectedRange.end &&
-      !isDraggingColumn && !isResizingSheetHeader && !isResizingStructure && !isDraggingStructure
-    ) {
-      const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
-      if (isPrintableChar) {
-        // Calculate range bounds
-        const minRow = Math.min(selectedRange.start.row, selectedRange.end.row)
-        const maxRow = Math.max(selectedRange.start.row, selectedRange.end.row)
-        const minCol = Math.min(selectedRange.start.col, selectedRange.end.col)
-        const maxCol = Math.max(selectedRange.start.col, selectedRange.end.col)
-        // Only create merged cell if range is more than 1 cell
-        if (minRow !== maxRow || minCol !== maxCol) {
-          // Create a new merged cell structure (type as 'cell' literal)
-          const mergedCellId = `cell-${minRow}-${minCol}-${maxRow}-${maxCol}-${Date.now()}`
-          const centerRow = Math.floor((minRow + maxRow) / 2)
-          const centerCol = Math.floor((minCol + maxCol) / 2)
-          const newMergedCell = {
-            type: 'cell' as const,
-            id: mergedCellId,
-            startPosition: { row: minRow, col: minCol },
-            dimensions: { rows: maxRow - minRow + 1, cols: maxCol - minCol + 1 },
-            value: e.key
-          }
-          setStructures((prev: StructureMap) => {
-            const newStructures = new Map(prev)
-            newStructures.set(mergedCellId, newMergedCell)
-            return newStructures
-          })
-          // Select the center cell and start editing
-          setSelectedRange({ start: { row: centerRow, col: centerCol }, end: { row: centerRow, col: centerCol } })
-          const cellKey = getCellKey(centerRow, centerCol)
-          setEditingCells(prev => {
-            const newSet = new Set(prev)
-            newSet.add(cellKey)
-            return newSet
-          })
-          setTimeout(() => {
-            const inputElement = document.querySelector(`input[data-cell-key="${cellKey}"]`) as HTMLInputElement
-            if (inputElement) {
-              inputElement.value = e.key
-              inputElement.focus()
-              inputElement.setSelectionRange(1, 1)
-              setCellValues(prev => {
-                const newMap = new Map(prev)
-                newMap.set(cellKey, e.key)
-                return newMap
-              })
-            }
-          }, 10)
-          e.preventDefault()
-          return
-        }
-      }
-    }
-
-    // 2. Column header editing (original logic)
-    if (selectedColumn && !isDraggingColumn && !isResizingSheetHeader && !isResizingStructure) {
-      const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
-      if (isPrintableChar) {
-        const table = structures.get(selectedColumn.tableId)
-        if (table && table.type === 'table') {
-          const tableStructure = table as any
-          const headerRow = tableStructure.startPosition.row
-          const headerCol = tableStructure.startPosition.col + selectedColumn.columnIndex
-          const cellKey = getCellKey(headerRow, headerCol)
-          setSelectedRange({ start: { row: headerRow, col: headerCol }, end: { row: headerRow, col: headerCol } })
-          setEditingCells(prev => {
-            const newSet = new Set(prev)
-            newSet.add(cellKey)
-            return newSet
-          })
-          setTimeout(() => {
-            const inputElement = document.querySelector(`input[data-cell-key="${cellKey}"]`) as HTMLInputElement
-            if (inputElement) {
-              inputElement.value = e.key
-              inputElement.focus()
-              inputElement.setSelectionRange(1, 1)
-              setCellValues(prev => {
-                const newMap = new Map(prev)
-                newMap.set(cellKey, e.key)
-                return newMap
-              })
-            }
-          }, 10)
-          e.preventDefault()
-        }
-      }
-    }
-  }, [
-    selectedRange,
-    selectedColumn,
-    isDraggingColumn,
-    isResizingSheetHeader,
-    isResizingStructure,
-    isDraggingStructure,
-    editingCells,
-    structures,
-    setStructures,
-    setSelectedRange,
-    setEditingCells,
-    setCellValues,
-    getCellKey
-  ])
 
   // Global keyboard handler for deletion
   const handleGlobalKeyDownForDeletion = React.useCallback((e: KeyboardEvent) => {
@@ -496,13 +402,13 @@ export const useGlobalEventHandlers = ({
       return
     }
 
-    if (e.key === 'Backspace') {
-      // Backspace key: Delete selected structure (but not when editing text)
-      if (selectedStructure && onDeleteStructure) {
-        e.preventDefault()
-        onDeleteStructure(selectedStructure.id)
-      }
-    }
+    // if (e.key === 'Backspace') {
+    //   // Backspace key: Delete selected structure (but not when editing text)
+    //   if (selectedStructure && onDeleteStructure) {
+    //     e.preventDefault()
+    //     onDeleteStructure(selectedStructure.id)
+    //   }
+    // }
   }, [
     selectedRange,
     selectedStructure,
@@ -519,16 +425,14 @@ export const useGlobalEventHandlers = ({
   React.useEffect(() => {
     document.addEventListener('mouseup', handleGlobalMouseUp)
     document.addEventListener('mousemove', handleGlobalMouseMove)
-    document.addEventListener('keydown', handleGlobalKeyDown)
     document.addEventListener('keydown', handleGlobalKeyDownForDeletion)
     
     return () => {
       document.removeEventListener('mouseup', handleGlobalMouseUp)
       document.removeEventListener('mousemove', handleGlobalMouseMove)
-      document.removeEventListener('keydown', handleGlobalKeyDown)
       document.removeEventListener('keydown', handleGlobalKeyDownForDeletion)
     }
-  }, [handleGlobalMouseUp, handleGlobalMouseMove, handleGlobalKeyDown, handleGlobalKeyDownForDeletion])
+  }, [handleGlobalMouseUp, handleGlobalMouseMove, handleGlobalKeyDownForDeletion])
 
   return {
     // The hooks manage their own event listeners, so no handlers need to be returned

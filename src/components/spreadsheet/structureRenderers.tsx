@@ -51,6 +51,7 @@ export interface StructureRenderProps {
   setHoveredAddButton: React.Dispatch<React.SetStateAction<any>>
   handleAddColumn: (structureId: string, insertIndex: number, position: 'left' | 'right') => void
   handleAddRow: (structureId: string, insertIndex: number, position: 'bottom') => void
+  onGridClick?: (row: number, col: number, structure?: Structure) => boolean
 }
 
 // =============================================================================
@@ -324,6 +325,14 @@ function renderStructureInteractionAreas(
       }}
       onClick={(e) => {
         e.stopPropagation()
+        
+        // Try reference insertion first if onGridClick is available
+        if (props.onGridClick) {
+          const handled = props.onGridClick(structure.startPosition.row, structure.startPosition.col, structure)
+          if (handled) return // Stop here if reference was inserted
+        }
+        
+        // Continue with normal selection logic
         props.setSelectedColumn(null)
         if (!props.selectedStructure || props.selectedStructure.id !== structure.id) {
           props.selectStructure(structure)
@@ -353,6 +362,14 @@ function renderStructureInteractionAreas(
       }}
       onClick={(e) => {
         e.stopPropagation()
+        
+        // Try reference insertion first if onGridClick is available
+        if (props.onGridClick) {
+          const handled = props.onGridClick(structure.startPosition.row, structure.startPosition.col, structure)
+          if (handled) return // Stop here if reference was inserted
+        }
+        
+        // Continue with normal selection logic
         props.setSelectedColumn(null)
         if (!props.selectedStructure || props.selectedStructure.id !== structure.id) {
           props.selectStructure(structure)
@@ -382,6 +399,14 @@ function renderStructureInteractionAreas(
       }}
       onClick={(e) => {
         e.stopPropagation()
+        
+        // Try reference insertion first if onGridClick is available
+        if (props.onGridClick) {
+          const handled = props.onGridClick(structure.startPosition.row, structure.startPosition.col, structure)
+          if (handled) return // Stop here if reference was inserted
+        }
+        
+        // Continue with normal selection logic
         props.setSelectedColumn(null)
         if (!props.selectedStructure || props.selectedStructure.id !== structure.id) {
           props.selectStructure(structure)
@@ -411,6 +436,14 @@ function renderStructureInteractionAreas(
       }}
       onClick={(e) => {
         e.stopPropagation()
+        
+        // Try reference insertion first if onGridClick is available
+        if (props.onGridClick) {
+          const handled = props.onGridClick(structure.startPosition.row, structure.startPosition.col, structure)
+          if (handled) return // Stop here if reference was inserted
+        }
+        
+        // Continue with normal selection logic
         props.setSelectedColumn(null)
         if (!props.selectedStructure || props.selectedStructure.id !== structure.id) {
           props.selectStructure(structure)
@@ -850,6 +883,8 @@ export function renderStructureNameTab(props: StructureRenderProps): React.React
     displayText = props.editingNameValue
   } else if (structure.name) {
     displayText = structure.name
+  } else if (structure.type === 'cell') {
+    return null
   } else {
     displayText = `Add a name`
     isPrompt = true

@@ -49,6 +49,10 @@ export const useSpreadsheetState = () => {
   const [columnDragStartX, setColumnDragStartX] = React.useState(0)
   const [columnDropTarget, setColumnDropTarget] = React.useState<{tableId: string, targetColumnIndex: number} | null>(null)
 
+  // Recursive selection state
+  const [selectedStructureLevel, setSelectedStructureLevel] = React.useState(0)
+  const [lastClickedPosition, setLastClickedPosition] = React.useState<Position | null>(null)
+
   // Template-related state
   const [templates, setTemplates] = React.useState<Template[]>([])
   const [templatesSidebarCollapsed, setTemplatesSidebarCollapsed] = React.useState(false)
@@ -57,6 +61,10 @@ export const useSpreadsheetState = () => {
   const [currentTemplate, setCurrentTemplate] = React.useState<Template | null>(null)
   const [templateStructures, setTemplateStructures] = React.useState<StructureMap>(new Map())
   const [templatePositions, setTemplatePositions] = React.useState<PositionMap>(new Map())
+
+  // Formula bar state
+  const [isFormulaBarFocused, setIsFormulaBarFocused] = React.useState(false)
+  const [currentFormula, setCurrentFormula] = React.useState('')
 
   // Keep position map in sync with structures
   React.useEffect(() => {
@@ -110,6 +118,10 @@ export const useSpreadsheetState = () => {
     columnDragStartX,
     columnDropTarget,
 
+    // Recursive selection state values
+    selectedStructureLevel,
+    lastClickedPosition,
+
     // Template state values
     templates,
     templatesSidebarCollapsed,
@@ -118,6 +130,10 @@ export const useSpreadsheetState = () => {
     currentTemplate,
     templateStructures,
     templatePositions,
+
+    // Formula bar state values
+    isFormulaBarFocused,
+    currentFormula,
 
     // State setters
     setStructures,
@@ -160,6 +176,10 @@ export const useSpreadsheetState = () => {
     setColumnDragStartX,
     setColumnDropTarget,
 
+    // Recursive selection state setters
+    setSelectedStructureLevel,
+    setLastClickedPosition,
+
     // Template state setters
     setTemplates,
     setTemplatesSidebarCollapsed,
@@ -168,5 +188,9 @@ export const useSpreadsheetState = () => {
     setCurrentTemplate,
     setTemplateStructures,
     setTemplatePositions,
+
+    // Formula bar state setters
+    setIsFormulaBarFocused,
+    setCurrentFormula,
   }
 }

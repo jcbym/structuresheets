@@ -9,42 +9,56 @@ import { getEndPosition } from '../../utils/structureUtils'
 /**
  * Check if a cell is a table header cell
  */
-export function isHeaderCell(row: number, col: number, structure?: Structure): boolean {
-  if (!structure || structure.type !== 'table') return false
+export function isHeaderCell(row: number, col: number, structures?: Structure[]): boolean {
+  if (!structures || structures.length === 0) return false
   
-  const table = structure as TableStructure
-  const { startPosition } = table
-  const headerRows = table.colHeaderLevels || 0
-  const headerCols = table.rowHeaderLevels || 0
+  // Check all structures at this position for table headers
+  for (const structure of structures) {
+    if (structure.type === 'table') {
+      const table = structure as TableStructure
+      const { startPosition } = table
+      const headerRows = table.colHeaderLevels || 0
+      const headerCols = table.rowHeaderLevels || 0
+      
+      // Check if cell is within header row range (column headers)
+      const isInHeaderRows = headerRows > 0 && 
+        row >= startPosition.row && 
+        row < startPosition.row + headerRows
+      
+      // Check if cell is within header column range (row headers)
+      const isInHeaderCols = headerCols > 0 && 
+        col >= startPosition.col && 
+        col < startPosition.col + headerCols
+      
+      if (isInHeaderRows || isInHeaderCols) {
+        return true
+      }
+    }
+  }
   
-  // Check if cell is within header row range (column headers)
-  const isInHeaderRows = headerRows > 0 && 
-    row >= startPosition.row && 
-    row < startPosition.row + headerRows
-  
-  // Check if cell is within header column range (row headers)
-  const isInHeaderCols = headerCols > 0 && 
-    col >= startPosition.col && 
-    col < startPosition.col + headerCols
-  
-  return isInHeaderRows || isInHeaderCols
+  return false
 }
 
 /**
  * Get CSS classes for a cell
  */
-export function getCellClasses(row: number, col: number, structure?: Structure): string {
+export function getCellClasses(row: number, col: number, structures?: Structure[]): string {
   let classes = 'w-full h-full px-2 py-1 cursor-cell flex items-center'
   
-  if (structure && isHeaderCell(row, col, structure)) {
+  if (structures && isHeaderCell(row, col, structures)) {
     classes += ' font-bold'
   }
   
   // Center content for resized cells (merged cells)
-  if (structure && structure.type === 'cell') {
-    const { startPosition, dimensions } = structure
-    if (dimensions.rows > 1 || dimensions.cols > 1) {
-      classes += ' justify-center text-center'
+  if (structures) {
+    for (const structure of structures) {
+      if (structure.type === 'cell') {
+        const { startPosition, dimensions } = structure
+        if (dimensions.rows > 1 || dimensions.cols > 1) {
+          classes += ' justify-center text-center'
+          break // Only need to apply this once
+        }
+      }
     }
   }
   
@@ -54,7 +68,7 @@ export function getCellClasses(row: number, col: number, structure?: Structure):
 /**
  * Get inline styles for a cell
  */
-export function getCellStyle(row: number, col: number, structure?: Structure, isInRange?: boolean): React.CSSProperties {
+export function getCellStyle(row: number, col: number, structures?: Structure[], isInRange?: boolean): React.CSSProperties {
   const baseStyle: React.CSSProperties = { 
     width: '100%', 
     height: '100%'
@@ -63,13 +77,25 @@ export function getCellStyle(row: number, col: number, structure?: Structure, is
   // Default background
   baseStyle.backgroundColor = '#F3F4F6'
   
-  if (structure && isHeaderCell(row, col, structure) && structure.type === 'table') {
-    // Use green background to match table border color
-    return { ...baseStyle, backgroundColor: 'rgba(0, 166, 62, 0.8)' }
-  }
+  // Styling precedence (highest to lowest priority):
+  // 1. Table header styling (green background) - HIGHEST priority
+  // 2. Cell structure backgrounds (white for cells)
+  // 3. Selected range styling (blue background)
+  // 4. Default background
   
-  if (structure?.type === 'cell') {
-    return { ...baseStyle, backgroundColor: 'rgba(255, 255, 255, 1)' }
+  if (structures && structures.length > 0) {
+    // Check for table headers FIRST (highest priority)
+    if (isHeaderCell(row, col, structures)) {
+      // Use green background to match table border color
+      return { ...baseStyle, backgroundColor: 'rgba(0, 166, 62, 0.8)' }
+    }
+    
+    // Check for cell structures (second priority)
+    for (const structure of structures) {
+      if (structure.type === 'cell' || structure.type === 'array' || structure.type === 'table') {
+        return { ...baseStyle, backgroundColor: 'rgba(255, 255, 255, 1)' }
+      }
+    }
   }
 
   // If cell is in selected range, use blue background
@@ -82,8 +108,33 @@ export function getCellStyle(row: number, col: number, structure?: Structure, is
 
 /**
  * Check if a cell position is covered by a resized cell
+ * This function checks all cell structures at a position to see if any merged cells cover this position
  */
-export function isCellCoveredByResizedCell(row: number, col: number, structures: StructureMap): boolean {
+export function isCellCoveredByResizedCell(row: number, col: number, structures: StructureMap, structuresAtPosition?: Structure[]): boolean {
+  // If we have structures at this position, use them for better nested structure support
+  if (structuresAtPosition) {
+    // Check if any cell structure at this position is a merged cell that covers this position
+    for (const structure of structuresAtPosition) {
+      if (structure.type === 'cell') {
+        const { startPosition, dimensions } = structure
+        const endPosition = getEndPosition(startPosition, dimensions)
+        const rows = endPosition.row - startPosition.row + 1
+        const cols = endPosition.col - startPosition.col + 1
+        if (rows > 1 || cols > 1) {
+          // This is a resized cell
+          if (row >= startPosition.row && row < startPosition.row + rows &&
+              col >= startPosition.col && col < startPosition.col + cols &&
+              !(row === startPosition.row && col === startPosition.col)) {
+            // This position is covered by the resized cell (but not the top-left corner)
+            return true
+          }
+        }
+      }
+    }
+    return false
+  }
+  
+  // Fallback to old method if structured position data is not available
   for (const [, structure] of structures) {
     if (structure.type === 'cell') {
       const { startPosition, dimensions } = structure
@@ -113,7 +164,7 @@ export interface CellContentProps {
   col: number
   value: string
   isSelected: boolean
-  structure?: Structure
+  structures?: Structure[]
   isInRange?: boolean
   cellKey: string
   isEditing: boolean
@@ -141,7 +192,7 @@ export function renderCellContent(props: CellContentProps): JSX.Element {
     row,
     col,
     isSelected,
-    structure,
+    structures,
     isInRange,
     cellKey,
     isEditing,
@@ -160,12 +211,11 @@ export function renderCellContent(props: CellContentProps): JSX.Element {
   return (
     <div 
       className="w-full h-full relative"
-      onMouseEnter={() => handleMouseEnter(row, col)}
-      onMouseUp={handleMouseUp}
-      onContextMenu={(e) => handleRightClick(row, col, e)}
-      onDoubleClick={() => handleCellDoubleClick(row, col)}
-      onKeyDown={(e) => handleCellKeyDownGeneral(e, row, col)}
-      tabIndex={isSelected ? 0 : -1}
+      onMouseEnter={() => !isEditing && handleMouseEnter(row, col)}
+      onMouseUp={!isEditing ? handleMouseUp : undefined}
+      onContextMenu={!isEditing ? (e) => handleRightClick(row, col, e) : undefined}
+      onKeyDown={!isEditing ? (e) => handleCellKeyDownGeneral(e, row, col) : undefined}
+      tabIndex={isSelected && !isEditing ? 0 : -1}
     >
       {isEditing ? (
         <input
@@ -173,15 +223,34 @@ export function renderCellContent(props: CellContentProps): JSX.Element {
           value={cellValue}
           data-cell-key={cellKey}
           onChange={(e) => {
+            e.stopPropagation()
             setCellValues(prev => {
               const newMap = new Map(prev)
               newMap.set(cellKey, e.target.value)
               return newMap
             })
           }}
-          onBlur={(e) => handleCellBlur(row, col, e)}
-          onFocus={() => handleCellFocusChange(row, col)}
-          onKeyDown={(e) => handleCellKeyDown(e, row, col)}
+          onBlur={(e) => {
+            e.stopPropagation()
+            handleCellBlur(row, col, e)
+          }}
+          onFocus={(e) => {
+            e.stopPropagation()
+            handleCellFocusChange(row, col)
+          }}
+          onKeyDown={(e) => {
+            // Prevent parent handlers from interfering with input
+            e.stopPropagation()
+            handleCellKeyDown(e, row, col)
+          }}
+          onMouseDown={(e) => {
+            // Prevent drag handlers from interfering with input selection
+            e.stopPropagation()
+          }}
+          onMouseEnter={(e) => {
+            // Prevent hover handlers from interfering
+            e.stopPropagation()
+          }}
           className="w-full h-full outline-none px-2 py-1"
           style={{ 
             minWidth: '80px', 
@@ -192,9 +261,9 @@ export function renderCellContent(props: CellContentProps): JSX.Element {
         />
       ) : (
         <div 
-          className={getCellClasses(row, col, structure)}
-          style={getCellStyle(row, col, structure, isInRange)}
-          title={structure?.name ? `${structure.type}: ${structure.name}` : undefined}
+          className={getCellClasses(row, col, structures)}
+          style={getCellStyle(row, col, structures, isInRange)}
+          title={structures && structures.length > 0 ? structures.map(s => `${s.type}${s.name ? `: ${s.name}` : ''}`).join(', ') : undefined}
         >
           {cellValue || '\u00A0'}
         </div>

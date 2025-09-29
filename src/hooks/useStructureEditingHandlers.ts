@@ -1,14 +1,19 @@
 import React from 'react'
 import { Structure, StructureMap, PositionMap, ArrayStructure, TableStructure } from '../types'
+import { expandStructureWithPushing, isTemplateArray, calculateTemplateArrayExpansion, calculateTemplateInstancePosition } from '../utils/structureUtils'
+import { instantiateTemplate } from '../utils/templateInstantiation'
+import { getTemplateStructures } from '../utils/templateStorage'
 
 interface StructureEditingHandlersProps {
   structures: StructureMap
+  positions: PositionMap
   selectedStructure: Structure | null
   hoveredHeaderCell: {row: number, col: number} | null
   showAddColumnButton: boolean
   
   // State setters
   setStructures: React.Dispatch<React.SetStateAction<StructureMap>>
+  setPositions: React.Dispatch<React.SetStateAction<PositionMap>>
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
   setHoveredHeaderCell: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
   setShowAddColumnButton: React.Dispatch<React.SetStateAction<boolean>>
@@ -19,10 +24,12 @@ interface StructureEditingHandlersProps {
 
 export const useStructureEditingHandlers = ({
   structures,
+  positions,
   selectedStructure,
   hoveredHeaderCell,
   showAddColumnButton,
   setStructures,
+  setPositions,
   setSelectedStructure,
   setHoveredHeaderCell,
   setShowAddColumnButton,
@@ -73,243 +80,272 @@ export const useStructureEditingHandlers = ({
     }
   }, [structures])
 
-  // Add column to table
+  // Add column to table with pushing behavior
   const handleAddTableColumn = React.useCallback((tableId: string, _insertAfterCol: number, position: 'left' | 'right') => {
-    // Find the table structure by ID
-    const table = structures.get(tableId)
+    const result = expandStructureWithPushing(
+      tableId,
+      position, // 'left' or 'right'
+      1, // expand by 1 column
+      structures,
+      positions
+    )
     
-    if (!table || table.type !== 'table') return
-    
-    const tableStructure = table as TableStructure
-    
-    // Update table dimensions
-    const newDimensions = { 
-      rows: tableStructure.dimensions.rows, 
-      cols: tableStructure.dimensions.cols + 1 
+    if (result.success) {
+      // Update both structures and positions
+      setStructures(result.structures)
+      setPositions(result.positions)
+      
+      // Update selected structure if it's the same table
+      if (selectedStructure && selectedStructure.id === tableId) {
+        const updatedStructure = result.structures.get(tableId)
+        if (updatedStructure) {
+          selectStructure(updatedStructure)
+        }
+      }
+    } else {
+      // Handle failure - could show a toast or alert
+      console.warn('Failed to add column:', result.reason)
     }
+  }, [structures, positions, selectedStructure, setStructures, setPositions, selectStructure])
+
+  // Add column to array with pushing behavior
+  const handleAddArrayColumn = React.useCallback((arrayId: string, _insertAfterCol: number, position: 'left' | 'right') => {
+    const array = structures.get(arrayId) as ArrayStructure
+    if (!array || array.type !== 'array') return
     
-    // Calculate new table positions based on insert position
-    let newStartPosition = { ...tableStructure.startPosition }
-    
-    if (position === 'left') {
-      // Adding to the left: move start position left
-      newStartPosition.col = tableStructure.startPosition.col - 1
-    }
-    // For adding to the right, start position stays the same
-    
-    // Update cellIds array to accommodate the new column
-    const newCellIds: (string | null)[][] = []
-    for (let r = 0; r < tableStructure.dimensions.rows; r++) {
-      const row: (string | null)[] = []
-      for (let c = 0; c < newDimensions.cols; c++) {
-        if (position === 'left' && c === 0) {
-          // Insert null for new column at the beginning
-          row.push(null)
-        } else if (position === 'right' && c === newDimensions.cols - 1) {
-          // Insert null for new column at the end
-          row.push(null)
+    // Check if this is a template array
+    if (isTemplateArray(array) && array.templateDimensions && array.direction === 'horizontal') {
+      // Template array - need to add a new template instance
+      try {
+        const { direction: expansionDirection, amount: expansionAmount } = calculateTemplateArrayExpansion(
+          array,
+          array.templateDimensions
+        )
+        
+        // Calculate position for the new template instance
+        const currentInstanceCount = array.instanceCount || 1
+        const newInstancePosition = calculateTemplateInstancePosition(
+          array.startPosition,
+          array.direction,
+          array.templateDimensions,
+          currentInstanceCount
+        )
+        
+        // Create new template instance
+        const instantiationResult = instantiateTemplate(
+          array.contentType,
+          newInstancePosition,
+          array.templateDimensions,
+          1 // Template version
+        )
+        
+        // Expand the array structure using pushing
+        const result = expandStructureWithPushing(
+          arrayId,
+          expansionDirection,
+          expansionAmount,
+          structures,
+          positions
+        )
+        
+        if (result.success) {
+          // Update structures with new template instance
+          const newStructures = new Map(result.structures)
+          
+          // Add the new template instance and its nested structures
+          newStructures.set(instantiationResult.templateStructure.id, instantiationResult.templateStructure)
+          for (const nestedStructure of instantiationResult.nestedStructures) {
+            newStructures.set(nestedStructure.id, nestedStructure)
+          }
+          
+          // Update the array structure to include the new template instance
+          const updatedArray = newStructures.get(arrayId) as ArrayStructure
+          if (updatedArray) {
+            const finalArray: ArrayStructure = {
+              ...updatedArray,
+              instanceCount: currentInstanceCount + 1,
+              itemIds: [...updatedArray.itemIds, instantiationResult.templateStructure.id]
+            }
+            newStructures.set(arrayId, finalArray)
+          }
+          
+          setStructures(newStructures)
+          setPositions(result.positions)
+          
+          // Update selected structure
+          if (selectedStructure && selectedStructure.id === arrayId) {
+            const finalUpdatedStructure = newStructures.get(arrayId)
+            if (finalUpdatedStructure) {
+              selectStructure(finalUpdatedStructure)
+            }
+          }
+          
+          console.log('Successfully added template instance to array')
         } else {
-          // Copy existing cell IDs, adjusting for insertion
-          const sourceCol = position === 'left' ? c - 1 : c
-          if (tableStructure.cellIds && tableStructure.cellIds[r] && sourceCol >= 0 && sourceCol < tableStructure.cellIds[r].length) {
-            row.push(tableStructure.cellIds[r][sourceCol])
-          } else {
-            row.push(null)
+          console.warn('Failed to expand array for new template instance:', result.reason)
+        }
+      } catch (error) {
+        console.error('Failed to add template instance to array:', error)
+      }
+    } else {
+      // Regular array - use normal expansion logic
+      const result = expandStructureWithPushing(
+        arrayId,
+        position, // 'left' or 'right'
+        1, // expand by 1 column
+        structures,
+        positions
+      )
+      
+      if (result.success) {
+        setStructures(result.structures)
+        setPositions(result.positions)
+        
+        if (selectedStructure && selectedStructure.id === arrayId) {
+          const updatedStructure = result.structures.get(arrayId)
+          if (updatedStructure) {
+            selectStructure(updatedStructure)
           }
         }
+      } else {
+        console.warn('Failed to add column to array:', result.reason)
       }
-      newCellIds.push(row)
     }
-    
-    // Update table structure
-    const updatedTable = {
-      ...tableStructure,
-      dimensions: newDimensions,
-      startPosition: newStartPosition,
-      cellIds: newCellIds
-    }
-    
-    // Update the table structure
-    setStructures((prev: StructureMap) => {
-      const newStructures = new Map(prev)
-      newStructures.set(tableStructure.id, updatedTable)
-      return newStructures
-    })
-    
-    // Update selected structure if it's the same table
-    if (selectedStructure && selectedStructure.id === tableStructure.id) {
-      selectStructure(updatedTable)
-    }
-  }, [structures, selectedStructure, setStructures, selectStructure])
+  }, [structures, positions, selectedStructure, setStructures, setPositions, selectStructure])
 
-  // Add column to array
-  const handleAddArrayColumn = React.useCallback((arrayId: string, _insertAfterCol: number, position: 'left' | 'right') => {
-    // Find the array structure by ID
-    const array = structures.get(arrayId)
-    
+  // Add row to array with pushing behavior
+  const handleAddArrayRow = React.useCallback((arrayId: string, insertAfterRow: number, position: 'bottom') => {
+    const array = structures.get(arrayId) as ArrayStructure
     if (!array || array.type !== 'array') return
     
-    const arrayStructure = array as ArrayStructure
-    
-    // Calculate new array dimensions based on insert position
-    let newStartPosition = { ...arrayStructure.startPosition }
-    let newDimensions = { ...arrayStructure.dimensions }
-    
-    if (position === 'left') {
-      // Adding to the left: move start position left
-      newStartPosition.col = arrayStructure.startPosition.col - 1
-    }
-    // For adding to the right, start position stays the same
-    
-    // Increase column count
-    newDimensions.cols += 1
-    
-    // Update cellIds array to accommodate the new column
-    const newCellIds: (string | null)[] = []
-    for (let i = 0; i < newDimensions.cols; i++) {
-      if (position === 'left' && i === 0) {
-        // Insert null for new column at the beginning
-        newCellIds.push(null)
-      } else if (position === 'right' && i === newDimensions.cols - 1) {
-        // Insert null for new column at the end
-        newCellIds.push(null)
-      } else {
-        // Copy existing cell IDs, adjusting for insertion
-        const sourceIndex = position === 'left' ? i - 1 : i
-        if (arrayStructure.cellIds && sourceIndex >= 0 && sourceIndex < arrayStructure.cellIds.length) {
-          newCellIds.push(arrayStructure.cellIds[sourceIndex])
+    // Check if this is a template array
+    if (isTemplateArray(array) && array.templateDimensions && array.direction === 'vertical') {
+      // Template array - need to add a new template instance
+      try {
+        const { direction: expansionDirection, amount: expansionAmount } = calculateTemplateArrayExpansion(
+          array,
+          array.templateDimensions
+        )
+        
+        // Calculate position for the new template instance
+        const currentInstanceCount = array.instanceCount || 1
+        const newInstancePosition = calculateTemplateInstancePosition(
+          array.startPosition,
+          array.direction,
+          array.templateDimensions,
+          currentInstanceCount
+        )
+        
+        // Create new template instance
+        const instantiationResult = instantiateTemplate(
+          array.contentType,
+          newInstancePosition,
+          array.templateDimensions,
+          1 // Template version
+        )
+        
+        // Expand the array structure using pushing
+        const result = expandStructureWithPushing(
+          arrayId,
+          expansionDirection,
+          expansionAmount,
+          structures,
+          positions
+        )
+        
+        if (result.success) {
+          // Update structures with new template instance
+          const newStructures = new Map(result.structures)
+          
+          // Add the new template instance and its nested structures
+          newStructures.set(instantiationResult.templateStructure.id, instantiationResult.templateStructure)
+          for (const nestedStructure of instantiationResult.nestedStructures) {
+            newStructures.set(nestedStructure.id, nestedStructure)
+          }
+          
+          // Update the array structure to include the new template instance
+          const updatedArray = newStructures.get(arrayId) as ArrayStructure
+          if (updatedArray) {
+            const finalArray: ArrayStructure = {
+              ...updatedArray,
+              instanceCount: currentInstanceCount + 1,
+              itemIds: [...updatedArray.itemIds, instantiationResult.templateStructure.id]
+            }
+            newStructures.set(arrayId, finalArray)
+          }
+          
+          setStructures(newStructures)
+          setPositions(result.positions)
+          
+          // Update selected structure
+          if (selectedStructure && selectedStructure.id === arrayId) {
+            const finalUpdatedStructure = newStructures.get(arrayId)
+            if (finalUpdatedStructure) {
+              selectStructure(finalUpdatedStructure)
+            }
+          }
+          
+          console.log('Successfully added template instance to array')
         } else {
-          newCellIds.push(null)
+          console.warn('Failed to expand array for new template instance:', result.reason)
         }
+      } catch (error) {
+        console.error('Failed to add template instance to array:', error)
+      }
+    } else {
+      // Regular array - use normal expansion logic
+      const result = expandStructureWithPushing(
+        arrayId,
+        'down', // rows are added downward
+        1, // expand by 1 row
+        structures,
+        positions
+      )
+      
+      if (result.success) {
+        setStructures(result.structures)
+        setPositions(result.positions)
+        
+        if (selectedStructure && selectedStructure.id === arrayId) {
+          const updatedStructure = result.structures.get(arrayId)
+          if (updatedStructure) {
+            selectStructure(updatedStructure)
+          }
+        }
+      } else {
+        console.warn('Failed to add row to array:', result.reason)
       }
     }
-    
-    // Update array structure
-    const updatedArray = {
-      ...arrayStructure,
-      startPosition: newStartPosition,
-      dimensions: newDimensions,
-      cellIds: newCellIds
-    }
-    
-    // Update the array structure
-    setStructures((prev: StructureMap) => {
-      const newStructures = new Map(prev)
-      newStructures.set(arrayStructure.id, updatedArray)
-      return newStructures
-    })
-    
-    // Update selected structure if it's the same array
-    if (selectedStructure && selectedStructure.id === arrayStructure.id) {
-      selectStructure(updatedArray)
-    }
-  }, [structures, selectedStructure, setStructures, selectStructure])
+  }, [structures, positions, selectedStructure, setStructures, setPositions, selectStructure])
 
-  // Add row to array
-  const handleAddArrayRow = React.useCallback((arrayId: string, insertAfterRow: number, _position: 'bottom') => {
-    // Find the array structure by ID
-    const array = structures.get(arrayId)
-    
-    if (!array || array.type !== 'array') return
-    
-    const arrayStructure = array as ArrayStructure
-    
-    // Update array structure with increased row count
-    const newDimensions = {
-      rows: arrayStructure.dimensions.rows + 1,
-      cols: arrayStructure.dimensions.cols
-    }
-    
-    // Update cellIds array to accommodate the new row
-    const newCellIds: (string | null)[] = []
-    for (let i = 0; i < newDimensions.rows; i++) {
-      if (i === newDimensions.rows - 1) {
-        // Insert null for new row at the end
-        newCellIds.push(null)
-      } else {
-        // Copy existing cell IDs
-        if (arrayStructure.cellIds && i < arrayStructure.cellIds.length) {
-          newCellIds.push(arrayStructure.cellIds[i])
-        } else {
-          newCellIds.push(null)
-        }
-      }
-    }
-    
-    // Update array structure
-    const updatedArray = {
-      ...arrayStructure,
-      dimensions: newDimensions,
-      cellIds: newCellIds
-    }
-    
-    // Update the array structure
-    setStructures((prev: StructureMap) => {
-      const newStructures = new Map(prev)
-      newStructures.set(arrayStructure.id, updatedArray)
-      return newStructures
-    })
-    
-    // Update selected structure if it's the same array
-    if (selectedStructure && selectedStructure.id === arrayStructure.id) {
-      selectStructure(updatedArray)
-    }
-  }, [structures, selectedStructure, setStructures, selectStructure])
-
-  // Add row to table
+  // Add row to table with pushing behavior
   const handleAddTableRow = React.useCallback((tableId: string, insertAfterRow: number, position: 'top' | 'bottom') => {
-    // Find the table structure by ID
-    const table = structures.get(tableId)
+    const direction = position === 'top' ? 'up' : 'down'
+    const result = expandStructureWithPushing(
+      tableId,
+      direction, // 'up' or 'down'
+      1, // expand by 1 row
+      structures,
+      positions
+    )
     
-    if (!table || table.type !== 'table') return
-    
-    const tableStructure = table as TableStructure
-    
-    // Update table dimensions
-    const newDimensions = { 
-      rows: tableStructure.dimensions.rows + 1, 
-      cols: tableStructure.dimensions.cols
-    }
-    
-    // Update cellIds array to accommodate the new row
-    const newCellIds: (string | null)[][] = []
-    for (let r = 0; r < newDimensions.rows; r++) {
-      if ((position === 'bottom' && r === newDimensions.rows - 1) || 
-          (position === 'top' && r === 0)) {
-        // Insert row of nulls for new row
-        const newRow: (string | null)[] = new Array(newDimensions.cols).fill(null)
-        newCellIds.push(newRow)
-      } else {
-        // Copy existing row, adjusting for insertion
-        const sourceRow = position === 'top' ? r - 1 : r
-        if (tableStructure.cellIds && sourceRow >= 0 && sourceRow < tableStructure.cellIds.length) {
-          newCellIds.push([...tableStructure.cellIds[sourceRow]])
-        } else {
-          const newRow: (string | null)[] = new Array(newDimensions.cols).fill(null)
-          newCellIds.push(newRow)
+    if (result.success) {
+      // Update both structures and positions
+      setStructures(result.structures)
+      setPositions(result.positions)
+      
+      // Update selected structure if it's the same table
+      if (selectedStructure && selectedStructure.id === tableId) {
+        const updatedStructure = result.structures.get(tableId)
+        if (updatedStructure) {
+          selectStructure(updatedStructure)
         }
       }
+    } else {
+      // Handle failure - could show a toast or alert
+      console.warn('Failed to add row to table:', result.reason)
     }
-    
-    // Update table structure
-    const updatedTable = {
-      ...tableStructure,
-      dimensions: newDimensions,
-      cellIds: newCellIds
-    }
-    
-    // Update the table structure
-    setStructures((prev: StructureMap) => {
-      const newStructures = new Map(prev)
-      newStructures.set(tableStructure.id, updatedTable)
-      return newStructures
-    })
-    
-    // Update selected structure if it's the same table
-    if (selectedStructure && selectedStructure.id === tableStructure.id) {
-      selectStructure(updatedTable)
-    }
-  }, [structures, selectedStructure, setStructures, selectStructure])
+  }, [structures, positions, selectedStructure, setStructures, setPositions, selectStructure])
 
   // Handle structure name editing
   const handleStructureNameDoubleClick = React.useCallback((structure: Structure) => {

@@ -27,8 +27,8 @@ import {
 import { getTemplateDragState, clearTemplateDragState } from '../../utils/templateDragState'
 
 // Import modular hooks
-import { useGridEventHandlers } from '../../hooks/useGridEventHandlers'
-import { useDragAndDropHandlers } from '../../hooks/useDragAndDropHandlers'
+import { useCellEditing } from '../../hooks/useCellEditing'
+import { useStructureClickHandlers } from '../../hooks/useStructureClickHandlers'
 import { useResizeHandlers } from '../../hooks/useResizeHandlers'
 import { useStructureEditingHandlers } from '../../hooks/useStructureEditingHandlers'
 import { useGlobalEventHandlers } from '../../hooks/useGlobalEventHandlers'
@@ -73,6 +73,8 @@ interface SpreadsheetGridProps {
   startEditing: {row: number, col: number} | null
   hoveredHeaderCell: {row: number, col: number} | null
   showAddColumnButton: boolean
+  selectedStructureLevel: number
+  lastClickedPosition: Position | null
   // Templates for version tracking
   templates?: any[]
   isResizingSheetHeader: boolean
@@ -144,10 +146,13 @@ interface SpreadsheetGridProps {
     conflictingCells: Array<{row: number, col: number, existingValue: string, newValue: string}>
     draggedStructure: Structure
   } | null>>
+  setSelectedStructureLevel: React.Dispatch<React.SetStateAction<number>>
+  setLastClickedPosition: React.Dispatch<React.SetStateAction<Position | null>>
   
   // Event handlers
   onCellUpdate: (row: number, col: number, value: string) => void
   onDeleteStructure?: (structureId: string) => void
+  onGridClick?: (row: number, col: number, structure?: Structure) => boolean
   
   // Container ref
   containerRef: React.RefObject<HTMLDivElement>
@@ -166,6 +171,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   startEditing,
   hoveredHeaderCell,
   showAddColumnButton,
+  selectedStructureLevel,
+  lastClickedPosition,
   templates,
   isResizingSheetHeader,
   sheetHeaderResizeType,
@@ -226,8 +233,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   setLastValidDropTarget,
   setShowConflictDialog,
   setConflictDialogData,
+  setSelectedStructureLevel,
+  setLastClickedPosition,
   onCellUpdate,
   onDeleteStructure,
+  onGridClick,
   containerRef
 }) => {
   const viewportWidth = window.innerWidth
@@ -260,32 +270,19 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   } | null>(null)
   const [templateDropTarget, setTemplateDropTarget] = React.useState<Position | null>(null)
   
-  // Cell editing state
-  const [cellValues, setCellValues] = React.useState<Map<string, string>>(new Map())
-  const [editingCells, setEditingCells] = React.useState<Set<string>>(new Set())
-  
   // Flag to prevent double handling of column header clicks
   const [columnHeaderHandledInMouseDown, setColumnHeaderHandledInMouseDown] = React.useState(false)
 
-  // Initialize modular hooks
-  const gridEventHandlers = useGridEventHandlers({
+  // Initialize consolidated cell editing hook
+  const cellEditing = useCellEditing({
     structures,
     positions,
-    selectedStructure,
-    selectedColumn,
-    isDraggingSheetHeader,
-    sheetHeaderDragStart,
-    editingCells,
-    cellValues,
-    setSelectedRange,
-    setStartEditing,
-    setContextMenu,
-    setEditingCells,
-    setCellValues,
-    onCellUpdate
+    selectedRange,
+    onCellUpdate,
+    setSelectedRange
   })
 
-  const dragAndDropHandlers = useDragAndDropHandlers({
+  const structureClickHandlers = useStructureClickHandlers({
     structures,
     positions,
     selectedStructure,
@@ -305,6 +302,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     columnWidths,
     rowHeights,
     containerRef,
+    selectedStructureLevel,
+    lastClickedPosition,
+    stopCellEditing: cellEditing.stopEditing,
+    isCellBeingEdited: cellEditing.isEditing,
+    onGridClick,
     setSelectedStructure,
     setSelectedColumn,
     setSelectedRange,
@@ -323,7 +325,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setColumnHeaderHandledInMouseDown,
     setStructures,
     setPositions,
-    setEditingCells
+    setSelectedStructureLevel,
+    setLastClickedPosition
   })
 
   const resizeHandlers = useResizeHandlers({
@@ -364,14 +367,16 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   const structureEditingHandlers = useStructureEditingHandlers({
     structures,
+    positions,
     selectedStructure,
     hoveredHeaderCell,
     showAddColumnButton,
     setStructures,
+    setPositions,
     setSelectedStructure,
     setHoveredHeaderCell,
     setShowAddColumnButton,
-    selectStructure: dragAndDropHandlers.utils.selectStructure
+    selectStructure: structureClickHandlers.utils.selectStructure
   })
 
   // Initialize global event handlers (this manages its own event listeners)
@@ -384,13 +389,15 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     columnDropTarget,
     isResizingSheetHeader,
     isResizingStructure,
+    isDragging: isDraggingSheetHeader,
+    dragStart: sheetHeaderDragStart,
     selectedRange,
     selectedColumn,
     selectedStructure,
     structures,
     positions,
-    editingCells,
-    cellValues,
+    editingCells: new Set(), // Stub for now
+    cellValues: new Map(), // Stub for now
     setIsDragging,
     setDragStart,
     setIsDraggingStructure,
@@ -412,35 +419,51 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     setPositions,
     setSelectedRange,
     setSelectedColumn,
-    setEditingCells,
-    setCellValues,
-    processStructureDragMove: dragAndDropHandlers.handlers.processStructureDragMove,
-    processColumnDragMove: dragAndDropHandlers.handlers.processColumnDragMove,
+    setEditingCells: () => {}, // Stub for now
+    setCellValues: () => {}, // Stub for now
+    processStructureDragMove: structureClickHandlers.handlers.processStructureDragMove,
+    processCellRangeSelection: structureClickHandlers.handlers.processCellRangeSelection,
+    processColumnDragMove: structureClickHandlers.handlers.processColumnDragMove,
     processSheetHeaderResize: resizeHandlers.handlers.processSheetHeaderResize,
     processStructureResize: resizeHandlers.handlers.processStructureResize,
-    selectStructure: dragAndDropHandlers.utils.selectStructure,
+    selectStructure: structureClickHandlers.utils.selectStructure,
     getCellKey,
     onDeleteStructure
   })
 
-  // Extract handler references from hooks
+  // Extract handler references from consolidated cell editing hook
   const { 
-    handleCellBlur,
-    handleCellFocusChange, 
+    handleCellClick: originalHandleCellClick,
     handleCellDoubleClick,
-    handleCellKeyDown,
-    handleCellKeyDownGeneral,
-    handleMouseEnter,
-    handleMouseUp,
-    handleRightClick
-  } = gridEventHandlers.handlers
+    renderCell: cellEditingRenderCell
+  } = cellEditing
+
+  // Wrap cell click handler to include grid click functionality
+  const handleCellClick = React.useCallback((row: number, col: number) => {
+    // Get structure at this position for formula bar reference
+    const structure = getStructureAtPosition(row, col, positions, structures)
+    
+    // Call the onGridClick prop if provided (for formula bar integration)
+    if (onGridClick) {
+      const handled = onGridClick(row, col, structure)
+      if (handled) {
+        return // Stop processing if reference was inserted
+      }
+    }
+    
+    // Call the original cell click handler only if reference wasn't inserted
+    originalHandleCellClick(row, col)
+  }, [onGridClick, originalHandleCellClick, positions, structures])
+
+  // Stub handlers for grid renderers
+  const handleMouseEnter = () => {}
 
   const {
     startStructureDrag,
     handleMouseDown,
     handleColumnHeaderClick,
     handleColumnHeaderMouseDown
-  } = dragAndDropHandlers.handlers
+  } = structureClickHandlers.handlers
 
   const {
     handleResizeMouseDown,
@@ -461,7 +484,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const { editingStructureName, editingNameValue } = structureEditingHandlers.state
 
   // Use shared selectStructure function from drag and drop handlers
-  const selectStructure = dragAndDropHandlers.utils.selectStructure
+  const selectStructure = structureClickHandlers.utils.selectStructure
 
   // Scroll handler
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -701,93 +724,24 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   }
 
 
-  // Sync cell values with structures
-  React.useEffect(() => {
-    setCellValues(prev => {
-      const newMap = new Map()
-      
-      // First, preserve ALL editing cell values exactly as they are
-      for (const cellKey of editingCells) {
-        if (prev.has(cellKey)) {
-          newMap.set(cellKey, prev.get(cellKey)!)
-        }
-      }
-      
-      // Add values from structures for ALL positions that have structures
-      // (not just visible viewport) to ensure old cached values are cleared
-      for (const [, structure] of structures) {
-        const { startPosition, dimensions } = structure
-        const endPosition = getEndPosition(startPosition, dimensions)
-        
-        for (let row = startPosition.row; row <= endPosition.row; row++) {
-          for (let col = startPosition.col; col <= endPosition.col; col++) {
-            const cellKey = getCellKey(row, col)
-            
-            // Skip if this cell is currently being edited - already handled above
-            if (editingCells.has(cellKey)) {
-              continue
-            }
-            
-            // Only sync from structures for non-editing cells
-            const structureValue = getCellValue(row, col, structures, positions)
-            if (structureValue !== '') {
-              newMap.set(cellKey, structureValue)
-            }
-          }
-        }
-      }
-      
-      return newMap
-    })
-  }, [structures, editingCells, positions, getCellKey])
-
-  // Begin editing when startEditing is set
+  // Simple effect to trigger editing when startEditing is set
   React.useEffect(() => {
     if (startEditing) {
-      const cellKey = getCellKey(startEditing.row, startEditing.col)
-      setEditingCells(prev => {
-        const newSet = new Set(prev)
-        newSet.add(cellKey)
-        return newSet
-      })
+      cellEditing.focusCell(startEditing.row, startEditing.col, true)
       setStartEditing(null)
     }
-  }, [startEditing, setStartEditing, getCellKey])
+  }, [startEditing, setStartEditing, cellEditing])
 
   const renderCell = (
     row: number, 
     col: number, 
     value: string, 
     isSelected: boolean, 
-    structure?: Structure,
+    structures?: Structure[],
     isInRange?: boolean
   ) => {
-    const cellKey = getCellKey(row, col)
-    const isEditing = editingCells.has(cellKey)
-    const cellValue = cellValues.has(cellKey) ? cellValues.get(cellKey)! : value
-
-    const cellContentProps: CellContentProps = {
-      row,
-      col,
-      value,
-      isSelected,
-      structure,
-      isInRange,
-      cellKey,
-      isEditing,
-      cellValue,
-      handleMouseEnter,
-      handleMouseUp,
-      handleRightClick,
-      handleCellDoubleClick,
-      handleCellKeyDownGeneral,
-      handleCellBlur,
-      handleCellFocusChange,
-      handleCellKeyDown,
-      setCellValues
-    }
-
-    return renderCellContent(cellContentProps)
+    // Use the new simplified renderCell from useCellEditing
+    return cellEditingRenderCell(row, col, isSelected)
   }
 
 
@@ -827,7 +781,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       handleStructureNameCancel,
       setHoveredAddButton,
       handleAddColumn,
-      handleAddRow
+      handleAddRow,
+      onGridClick
     }
 
     for (const [key, structure] of structures) {
@@ -992,7 +947,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           handleColumnHeaderMouseDown,
           handleMouseDown,
           setHoveredStructure,
-          renderCell
+          setSelectedRange,
+          setStartEditing,
+          renderCell,
+          handleCellClick: cellEditing.handleCellClick,
+          handleCellDoubleClick: cellEditing.handleCellDoubleClick
         })}
         
         {/* Rows and cells */}
@@ -1013,7 +972,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           handleColumnHeaderMouseDown,
           handleMouseDown,
           setHoveredStructure,
-          renderCell
+          setSelectedRange,
+          setStartEditing,
+          renderCell,
+          handleCellClick: cellEditing.handleCellClick,
+          handleCellDoubleClick: cellEditing.handleCellDoubleClick
         })}
         
         {/* Structure overlays */}

@@ -1,6 +1,7 @@
 import React from 'react'
-import { StructurePanelProps, TableStructure } from '../../types'
+import { StructurePanelProps, TableStructure, ArrayStructure } from '../../types'
 import { COLUMN_LETTERS } from '../../constants'
+import { Template } from './TemplatesSidebar'
 
 // Name input component for structures without names
 const NameInput: React.FC<{
@@ -77,6 +78,8 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
   onToggleTableColumns,
   onUpdateStructureName,
   onUpdateStructureFormula,
+  onUpdateArrayContentType,
+  availableTemplates,
   isCollapsed,
   width,
   onToggleCollapse,
@@ -95,6 +98,34 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
     // Fetch the latest version from the structures map
     return structures.get(selectedStructure.id) || selectedStructure
   }, [selectedStructure, structures])
+
+  // Track the previous structure ID to detect changes
+  const prevStructureIdRef = React.useRef<string | null>(null)
+
+  // Effect to handle structure deselection while editing name
+  React.useEffect(() => {
+    const currentId = selectedStructure?.id || null
+    const prevId = prevStructureIdRef.current
+
+    // If we were editing a name and the structure changed or was deselected, save the edit
+    if (isEditingName && prevId && currentId !== prevId) {
+      const trimmedName = editingNameValue.trim()
+      if (trimmedName) {
+        // Save the name to the previous structure before it was deselected/changed
+        onUpdateStructureName(prevId, trimmedName)
+      }
+      // Stop editing
+      setIsEditingName(false)
+      setEditingNameValue('')
+    } else if (isEditingName && !currentId) {
+      // If structure was deselected while editing (even with empty name), stop editing
+      setIsEditingName(false)
+      setEditingNameValue('')
+    }
+
+    // Update the ref with the current structure ID
+    prevStructureIdRef.current = currentId
+  }, [selectedStructure?.id, isEditingName, editingNameValue, onUpdateStructureName])
 
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -288,13 +319,66 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                 </div>
               )}
 
+              {/* Array Content Type Section */}
+              {currentStructure?.type === 'array' && (
+                <div className="mb-6">
+                  <h4 className="font-semibold mb-3 text-gray-700">Template</h4>
+                  <div className="space-y-2">
+                    <select
+                      value={(currentStructure as ArrayStructure).contentType}
+                      onChange={(e) => onUpdateArrayContentType(currentStructure.id, e.target.value)}
+                      className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                    >
+                      <option value="cells">None</option>
+                      {(availableTemplates || []).map(template => (
+                        <option key={template.id} value={template.id}>
+                          {template.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="text-xs text-gray-500">
+                      {(() => {
+                        const arrayStructure = currentStructure as ArrayStructure
+                        const selectedTemplate = (availableTemplates || []).find(t => t.id === arrayStructure.contentType)
+                        
+                        if (selectedTemplate) {
+                          const instanceCount = arrayStructure.instanceCount || 1
+                          const templateDims = arrayStructure.templateDimensions
+                          const dimText = templateDims ? `${templateDims.rows}×${templateDims.cols}` : 'unknown'
+                          
+                          return (
+                            <div className="space-y-1">
+                              <div>Template: {selectedTemplate.name} ({dimText})</div>
+                              <div>Instances: {instanceCount}</div>
+                              <div className="text-blue-600">
+                                Use '+' button to add more instances
+                              </div>
+                            </div>
+                          )
+                        } else if (arrayStructure.contentType === 'cells') {
+                          return 'Array contains individual cells'
+                        } else {
+                          return 'Select a template to populate the array'
+                        }
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Formula Section */}
               <div className="mb-6">
-                <h4 className="font-semibold mb-3 text-gray-700">Formula</h4>
+                <h4 className="font-semibold mb-3 text-gray-700">
+                  {currentStructure.type === 'cell' ? 'Cell Formula' : 'Structure Formula'}
+                </h4>
                 <div className="space-y-2">
                   <input
                     type="text"
-                    placeholder="Enter formula (e.g., =SUM(A1:C3) or =SUM(arrayName))"
+                    placeholder={
+                      currentStructure.type === 'cell' 
+                        ? "Enter formula (e.g., =SUM(A1:A5) or =A1+B1)"
+                        : "Enter formula (e.g., =SUM(A1:C3) or =SUM(arrayName))"
+                    }
                     value={currentStructure.formula || ''}
                     onChange={(e) => onUpdateStructureFormula(currentStructure.id, e.target.value)}
                     className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -304,9 +388,15 @@ export const StructurePanel: React.FC<StructurePanelProps> = ({
                       Error: {currentStructure.formulaError}
                     </div>
                   )}
-                  {currentStructure.formulaValue !== undefined && !currentStructure.formulaError && (
+                  {currentStructure.formula && !currentStructure.formulaError && currentStructure.type === 'cell' && (
                     <div className="text-green-600 text-xs">
-                      Result: {String(currentStructure.formulaValue)}
+                      Result: {String((currentStructure as any).value || '')}
+                    </div>
+                  )}
+                  {currentStructure.type === 'cell' && (
+                    <div className="text-xs text-gray-500">
+                      This formula will be evaluated and displayed in the cell. 
+                      Use "=" prefix when typing directly in the cell.
                     </div>
                   )}
                 </div>

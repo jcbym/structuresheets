@@ -1,9 +1,11 @@
 import React from 'react'
 import { Structure, CellStructure, ArrayStructure, TableStructure, Position, Dimensions, StructureMap, PositionMap } from '../types'
 import { generateUUID } from '../utils/sheetUtils'
-import { addStructureToPositionMap, removeStructureFromPositionMap, getStructureAtPosition, getDimensions, initializeCellIdsFromRange } from '../utils/structureUtils'
+import { addStructureToPositionMap, removeStructureFromPositionMap, getStructureAtPosition, getDimensions, initializeCellIdsFromRange, getTemplateDimensionsFromStructures, calculateArrayDimensionsWithTemplate, calculateTemplateInstancePosition } from '../utils/structureUtils'
 import { FormulaEngine } from '../formula/engine'
 import { DependencyManager } from '../formula/dependencyManager'
+import { instantiateTemplate, addInstantiatedTemplateToStructures } from '../utils/templateInstantiation'
+import { getTemplateStructures, loadTemplates } from '../utils/templateStorage'
 
 export const useStructureOperations = (
   structures: StructureMap,
@@ -17,24 +19,35 @@ export const useStructureOperations = (
   const dependencyManagerRef = React.useRef(new DependencyManager());
   const dependencyManager = dependencyManagerRef.current;
 
-  // Helper function to recalculate a single structure
-  const recalculateStructure = React.useCallback((structureId: string, currentStructures: StructureMap): StructureMap => {
+  // Helper function to recalculate a single structure and return whether its value changed
+  const recalculateStructure = React.useCallback((structureId: string, currentStructures: StructureMap): { 
+    newStructures: StructureMap, 
+    valueChanged: boolean 
+  } => {
     const structure = currentStructures.get(structureId);
     if (!structure || !structure.formula) {
-      return currentStructures;
+      return { newStructures: currentStructures, valueChanged: false };
     }
 
     const newStructures = new Map(currentStructures);
+    let valueChanged = false;
     
     try {
       const engine = new FormulaEngine(newStructures, positions);
       const result = engine.evaluateFormula(structure.formula);
+      const dependencies = engine.getDependencies();
+
+      // Update dependencies in the dependency manager
+      dependencyManager.addFormula(structureId, structure.formula, dependencies);
       
       let updatedStructure = { ...structure };
+      // For formulas, we need to check if the calculated value changed
+      const oldValue = structure.type === 'cell' ? (structure as CellStructure).value : undefined;
       
       if (result.kind === 'ERROR') {
         updatedStructure.formulaError = result.value;
-        updatedStructure.formulaValue = undefined;
+        // Keep the current value unchanged on error
+        valueChanged = false;
       } else {
         updatedStructure.formulaError = undefined;
         
@@ -52,75 +65,84 @@ export const useStructureOperations = (
           displayValue = String(result.value);
         }
         
-        updatedStructure.formulaValue = displayValue;
-
         // Write the calculated value back to the structure's cells
         if (structure.type === 'cell') {
           (updatedStructure as CellStructure).value = displayValue;
-        } else if (structure.type === 'array' && 'cellIds' in structure) {
+          valueChanged = oldValue !== displayValue;
+        } else if (structure.type === 'array' && 'itemIds' in structure) {
           const arrayStructure = updatedStructure as ArrayStructure;
-          const cellIds = [...arrayStructure.cellIds];
+          const itemIds = [...arrayStructure.itemIds];
           
           if (result.kind === 'RANGE') {
             const values = result.value;
-            for (let i = 0; i < cellIds.length && i < values.length; i++) {
-              const cellId = cellIds[i];
-              if (cellId) {
-                const cell = newStructures.get(cellId) as CellStructure;
+            for (let i = 0; i < itemIds.length && i < values.length; i++) {
+              const itemId = itemIds[i];
+              if (itemId) {
+                const cell = newStructures.get(itemId) as CellStructure;
                 if (cell) {
-                  newStructures.set(cellId, {
+                  const oldValue = cell.value;
+                  const newValue = String(values[i]);
+                  newStructures.set(itemId, {
                     ...cell,
-                    value: String(values[i])
+                    value: newValue
                   });
+                  valueChanged = valueChanged || oldValue !== newValue;
                 }
               }
             }
           } else {
-            for (const cellId of cellIds) {
-              if (cellId) {
-                const cell = newStructures.get(cellId) as CellStructure;
+            for (const itemId of itemIds) {
+              if (itemId) {
+                const cell = newStructures.get(itemId) as CellStructure;
                 if (cell) {
-                  newStructures.set(cellId, {
+                  const oldValue = cell.value;
+                  newStructures.set(itemId, {
                     ...cell,
                     value: displayValue
                   });
+                  valueChanged = valueChanged || oldValue !== displayValue;
                 }
               }
             }
           }
-        } else if (structure.type === 'table' && 'cellIds' in structure) {
+        } else if (structure.type === 'table' && 'itemIds' in structure) {
           const tableStructure = updatedStructure as TableStructure;
-          const cellIds = [...tableStructure.cellIds];
+          const itemIds = [...tableStructure.itemIds];
           
           if (result.kind === 'RANGE') {
             const values = result.value;
             let valueIndex = 0;
             
-            for (let row = 0; row < cellIds.length && valueIndex < values.length; row++) {
-              for (let col = 0; col < cellIds[row].length && valueIndex < values.length; col++) {
-                const cellId = cellIds[row][col];
-                if (cellId) {
-                  const cell = newStructures.get(cellId) as CellStructure;
+            for (let row = 0; row < itemIds.length && valueIndex < values.length; row++) {
+              for (let col = 0; col < itemIds[row].length && valueIndex < values.length; col++) {
+                const itemId = itemIds[row][col];
+                if (itemId) {
+                  const cell = newStructures.get(itemId) as CellStructure;
                   if (cell) {
-                    newStructures.set(cellId, {
+                    const oldValue = cell.value;
+                    const newValue = String(values[valueIndex]);
+                    newStructures.set(itemId, {
                       ...cell,
-                      value: String(values[valueIndex])
+                      value: newValue
                     });
+                    valueChanged = valueChanged || oldValue !== newValue;
                   }
                 }
                 valueIndex++;
               }
             }
           } else {
-            for (const row of cellIds) {
-              for (const cellId of row) {
-                if (cellId) {
-                  const cell = newStructures.get(cellId) as CellStructure;
+            for (const row of itemIds) {
+              for (const itemId of row) {
+                if (itemId) {
+                  const cell = newStructures.get(itemId) as CellStructure;
                   if (cell) {
-                    newStructures.set(cellId, {
+                    const oldValue = cell.value;
+                    newStructures.set(itemId, {
                       ...cell,
                       value: displayValue
                     });
+                    valueChanged = valueChanged || oldValue !== displayValue;
                   }
                 }
               }
@@ -133,17 +155,18 @@ export const useStructureOperations = (
     } catch (error) {
       const structure = newStructures.get(structureId);
       if (structure) {
+        const oldError = structure.formulaError;
         const updatedStructure = {
           ...structure,
-          formulaError: error instanceof Error ? error.message : 'Unknown error',
-          formulaValue: undefined
+          formulaError: error instanceof Error ? error.message : 'Unknown error'
         };
         newStructures.set(structureId, updatedStructure);
+        valueChanged = oldError !== updatedStructure.formulaError;
       }
     }
     
-    return newStructures;
-  }, [positions]);
+    return { newStructures, valueChanged };
+  }, [positions, dependencyManager]);
 
   const createStructure = (type: Structure['type'], name: string, startPosition: Position, dimensions: Dimensions) => {
     let newStructure: Structure
@@ -183,7 +206,8 @@ export const useStructureOperations = (
           dimensions: dimensions,
           name,
           direction,
-          cellIds: arrayCellIds
+          contentType: 'cells', // Default to cells for backward compatibility
+          itemIds: arrayCellIds
         }
         return newStructure
 
@@ -200,7 +224,7 @@ export const useStructureOperations = (
           name,
           colHeaderLevels: 1,
           rowHeaderLevels: 0,
-          cellIds: tableCellIds
+          itemIds: tableCellIds
         }
         return newStructure
     }
@@ -279,6 +303,9 @@ export const useStructureOperations = (
       const newStructures = new Map(prev)
       const structure = newStructures.get(structureId)
       if (structure) {
+        // Get the old name for dependency tracking
+        const oldName = structure.name;
+        
         // Set name to undefined if empty string is passed to delete the name
         const updatedStructure = { ...structure, name: name || undefined }
         newStructures.set(structureId, updatedStructure)
@@ -290,10 +317,32 @@ export const useStructureOperations = (
           }
           return current
         })
+        
+        // Trigger recalculation for formulas that depend on this structure
+        // This is important when:
+        // 1. Structure gets a name for the first time (formulas can now reference it)
+        // 2. Structure name changes (formulas using old name may break, new name may work)
+        // 3. Structure name is removed (formulas using the name may break)
+        if (oldName !== (name || undefined)) {
+          const dependents = dependencyManager.getDependentsOfStructure(structureId);
+          if (dependents.length > 0) {
+            // Use setTimeout to ensure the structure update happens first
+            setTimeout(() => {
+              setStructures(current => {
+                let updatedStructures = new Map(current);
+                for (const dependentId of dependents) {
+                  const result = recalculateStructure(dependentId, updatedStructures);
+                  updatedStructures = result.newStructures;
+                }
+                return updatedStructures;
+              });
+            }, 0);
+          }
+        }
       }
       return newStructures
     })
-  }, [setStructures, setSelectedStructure])
+  }, [setStructures, setSelectedStructure, dependencyManager, recalculateStructure])
 
   const updateStructureFormula = React.useCallback((structureId: string, formula: string) => {
     setStructures((prev: StructureMap) => {
@@ -311,7 +360,7 @@ export const useStructureOperations = (
       if (formula && formula.trim()) {
         try {
           const engine = new FormulaEngine(newStructures, positions);
-          const result = engine.evaluateFormula(formula);
+          const evalResult = engine.evaluateFormula(formula);
           const dependencies = engine.getDependencies();
 
           // Add to dependency manager
@@ -323,22 +372,19 @@ export const useStructureOperations = (
             updatedStructure = {
               ...structure,
               formula: formula,
-              formulaError: undefined,
-              formulaValue: undefined
+              formulaError: undefined
             } as CellStructure;
           } else if (structure.type === 'array') {
             updatedStructure = {
               ...structure,
               formula: formula,
-              formulaError: undefined,
-              formulaValue: undefined
+              formulaError: undefined
             } as ArrayStructure;
           } else if (structure.type === 'table') {
             updatedStructure = {
               ...structure,
               formula: formula,
-              formulaError: undefined,
-              formulaValue: undefined
+              formulaError: undefined
             } as TableStructure;
           } else {
             return newStructures;
@@ -347,7 +393,8 @@ export const useStructureOperations = (
           newStructures.set(structureId, updatedStructure);
 
           // Recalculate this structure
-          newStructures = recalculateStructure(structureId, newStructures);
+          const recalcResult = recalculateStructure(structureId, newStructures);
+          newStructures = recalcResult.newStructures;
 
           // Update selected structure
           setSelectedStructure(current => {
@@ -362,8 +409,7 @@ export const useStructureOperations = (
           const updatedStructure = {
             ...structure,
             formula: formula,
-            formulaError: error instanceof Error ? error.message : 'Unknown error',
-            formulaValue: undefined
+            formulaError: error instanceof Error ? error.message : 'Unknown error'
           };
           newStructures.set(structureId, updatedStructure);
 
@@ -379,8 +425,7 @@ export const useStructureOperations = (
         const updatedStructure = {
           ...structure,
           formula: undefined,
-          formulaError: undefined,
-          formulaValue: undefined
+          formulaError: undefined
         };
         newStructures.set(structureId, updatedStructure);
 
@@ -396,23 +441,249 @@ export const useStructureOperations = (
     });
   }, [dependencyManager, recalculateStructure, setStructures, setSelectedStructure, positions]);
 
-  // Function to handle cell value changes and trigger recalculation
-  const triggerRecalculation = React.useCallback((changedCells: Array<{row: number, col: number}>) => {
-    const calculationOrder = dependencyManager.getCalculationOrder(changedCells);
+  const updateArrayContentType = React.useCallback((arrayId: string, contentType: string) => {
+    setStructures((prev: StructureMap) => {
+      const newStructures = new Map(prev)
+      const structure = newStructures.get(arrayId)
+      
+      if (structure && structure.type === 'array') {
+        const arrayStructure = structure as ArrayStructure
+        
+        if (contentType === 'cells') {
+          // Switching back to cells - clear template properties
+          const updatedArray: ArrayStructure = {
+            ...arrayStructure,
+            contentType: 'cells',
+            templateDimensions: undefined,
+            instanceCount: undefined
+          }
+          
+          newStructures.set(arrayId, updatedArray)
+          
+          // Also update the selected structure if it's the same one
+          setSelectedStructure(current => {
+            if (current && current.id === arrayId) {
+              return updatedArray
+            }
+            return current
+          })
+        } else {
+          // Switching to a template - need to instantiate template and resize array
+          try {
+            // Get template dimensions from the Template object, not from stored structures
+            const templates = loadTemplates()
+            const template = templates.find(t => t.id === contentType)
+            if (!template) {
+              throw new Error(`Template ${contentType} not found`)
+            }
+            const templateDimensions = template.dimensions
+            
+            // Calculate new array dimensions for one template instance
+            const newArrayDimensions = calculateArrayDimensionsWithTemplate(
+              arrayStructure,
+              templateDimensions,
+              1 // Start with one instance
+            )
+            
+            // Calculate position for the template instance
+            const templatePosition = calculateTemplateInstancePosition(
+              arrayStructure.startPosition,
+              arrayStructure.direction,
+              templateDimensions,
+              0 // First instance
+            )
+            
+            // Create template instance
+            const instantiationResult = instantiateTemplate(
+              contentType,
+              templatePosition,
+              templateDimensions,
+              1 // Template version
+            )
+            
+            // Update array structure
+            const updatedArray: ArrayStructure = {
+              ...arrayStructure,
+              contentType: contentType,
+              templateDimensions: templateDimensions,
+              instanceCount: 1,
+              dimensions: newArrayDimensions,
+              itemIds: [instantiationResult.templateStructure.id] // Reference the template instance
+            }
+            
+            // Add the template instance to structures
+            newStructures.set(instantiationResult.templateStructure.id, instantiationResult.templateStructure)
+            
+            // Add all nested structures from the template
+            for (const nestedStructure of instantiationResult.nestedStructures) {
+              newStructures.set(nestedStructure.id, nestedStructure)
+            }
+            
+            // Update the array structure
+            newStructures.set(arrayId, updatedArray)
+            
+            // Apply cell data updates through onCellUpdate callback
+            for (const [positionKey, value] of Object.entries(instantiationResult.cellData)) {
+              const [rowStr, colStr] = positionKey.split('-')
+              const row = parseInt(rowStr, 10)
+              const col = parseInt(colStr, 10)
+              
+              if (value) {
+                // This will be handled by the calling component
+                // We can't call onCellUpdate directly here since it's not in scope
+                console.log(`Cell update needed at ${row},${col}: ${value}`)
+              }
+            }
+            
+            // Also update the selected structure if it's the same one
+            setSelectedStructure(current => {
+              if (current && current.id === arrayId) {
+                return updatedArray
+              }
+              return current
+            })
+            
+            console.log(`Successfully converted array to template type: ${contentType}`)
+            
+          } catch (error) {
+            console.error('Failed to instantiate template in array:', error)
+            
+            // Fall back to basic update without template instantiation
+            const updatedArray: ArrayStructure = {
+              ...arrayStructure,
+              contentType: contentType as any
+            }
+            
+            newStructures.set(arrayId, updatedArray)
+            
+            setSelectedStructure(current => {
+              if (current && current.id === arrayId) {
+                return updatedArray
+              }
+              return current
+            })
+          }
+        }
+      }
+      
+      return newStructures
+    })
     
-    if (calculationOrder.length > 0) {
-      setStructures(prev => {
-        let newStructures = new Map(prev);
+  }, [setStructures, setSelectedStructure, setPositions, structures]);
+
+  // Sync position mapping whenever structures change
+  React.useEffect(() => {
+    setPositions(prev => {
+      let newPositions = new Map(prev)
+      
+      // Rebuild position mapping for all structures
+      newPositions.clear()
+      for (const [, structure] of structures) {
+        newPositions = addStructureToPositionMap(structure, newPositions)
+      }
+      
+      return newPositions
+    })
+  }, [structures, setPositions])
+
+  // Function to handle cell value changes and trigger cascading recalculation
+  const triggerRecalculation = React.useCallback((changedCells: Array<{row: number, col: number}>) => {
+    setStructures(prev => {
+      let newStructures = new Map(prev);
+      const processedStructures = new Set<string>();
+      const maxIterations = 50; // Prevent infinite loops
+      let iteration = 0;
+      
+      // Start with the initial changed cells
+      let currentChangedCells = [...changedCells];
+      
+      while (currentChangedCells.length > 0 && iteration < maxIterations) {
+        iteration++;
+        
+        // Get structures that depend on the currently changed cells
+        const calculationOrder = dependencyManager.getEnhancedCalculationOrder(currentChangedCells, newStructures);
+        
+        // Track which structures changed values in this iteration
+        const structuresWithChanges = new Set<string>();
+        const cellsChangedThisIteration = new Set<string>();
         
         // Recalculate structures in dependency order
         for (const structureId of calculationOrder) {
-          newStructures = recalculateStructure(structureId, newStructures);
+          // Skip if we've already processed this structure in this cascade
+          if (processedStructures.has(structureId)) {
+            continue;
+          }
+          
+          const result = recalculateStructure(structureId, newStructures);
+          newStructures = result.newStructures;
+          processedStructures.add(structureId);
+          
+          // If the structure's value changed, we need to find what cells it affects
+          if (result.valueChanged) {
+            structuresWithChanges.add(structureId);
+            
+            // Get the structure to determine which cells it occupies
+            const structure = newStructures.get(structureId);
+            if (structure) {
+              // Add all cells that this structure occupies to the changed cells for the next iteration
+              const endRow = structure.startPosition.row + structure.dimensions.rows - 1;
+              const endCol = structure.startPosition.col + structure.dimensions.cols - 1;
+              
+              for (let row = structure.startPosition.row; row <= endRow; row++) {
+                for (let col = structure.startPosition.col; col <= endCol; col++) {
+                  cellsChangedThisIteration.add(`${row}-${col}`);
+                }
+              }
+            }
+          }
         }
         
-        return newStructures;
-      });
-    }
-  }, [dependencyManager, recalculateStructure, setStructures]);
+        // Prepare changed cells for the next iteration
+        currentChangedCells = Array.from(cellsChangedThisIteration).map(cellKey => {
+          const [row, col] = cellKey.split('-').map(Number);
+          return { row, col };
+        });
+        
+        // If no structures changed values, we can stop the cascade
+        if (structuresWithChanges.size === 0) {
+          break;
+        }
+        
+        // Also add dependents of changed structures for the next iteration
+        for (const structureId of structuresWithChanges) {
+          const structureDependents = dependencyManager.getDependentsOfStructure(structureId);
+          for (const dependentId of structureDependents) {
+            if (!processedStructures.has(dependentId)) {
+              const dependentStructure = newStructures.get(dependentId);
+              if (dependentStructure) {
+                const endRow = dependentStructure.startPosition.row + dependentStructure.dimensions.rows - 1;
+                const endCol = dependentStructure.startPosition.col + dependentStructure.dimensions.cols - 1;
+                
+                for (let row = dependentStructure.startPosition.row; row <= endRow; row++) {
+                  for (let col = dependentStructure.startPosition.col; col <= endCol; col++) {
+                    currentChangedCells.push({ row, col });
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        // Remove duplicates from currentChangedCells
+        const cellSet = new Set(currentChangedCells.map(cell => `${cell.row}-${cell.col}`));
+        currentChangedCells = Array.from(cellSet).map(cellKey => {
+          const [row, col] = cellKey.split('-').map(Number);
+          return { row, col };
+        });
+      }
+      
+      if (iteration >= maxIterations) {
+        console.warn('Recalculation cascade reached maximum iterations, stopping to prevent infinite loop');
+      }
+      
+      return newStructures;
+    });
+  }, [dependencyManager, recalculateStructure, setStructures, structures]);
 
   const rotateArray = React.useCallback((arrayId: string) => { // TODO: Implement array rotation with new model
     // setStructures((prev: StructureMap) => {
@@ -436,17 +707,17 @@ export const useStructureOperations = (
     //       }
           
     //       // Update cell positions to be vertical - need to update the actual cell structures
-    //       newCellIds = array.cellIds.map((cellId, index) => {
-    //         const cell = newStructures.get(cellId) as CellStructure
+    //       newCellIds = array.itemIds.map((itemId, index) => {
+    //         const cell = newStructures.get(itemId) as CellStructure
     //         if (cell) {
     //           const updatedCell = {
     //             ...cell,
     //             startPosition: { row: startPosition.row + index, col: startPosition.col },
     //             endPosition: { row: startPosition.row + index, col: startPosition.col }
     //           }
-    //           newStructures.set(cellId, updatedCell)
+    //           newStructures.set(itemId, updatedCell)
     //         }
-    //         return cellId
+    //         return itemId
     //       })
     //     } else {
     //       // Converting from vertical to horizontal
@@ -456,17 +727,17 @@ export const useStructureOperations = (
     //       }
           
     //       // Update cell positions to be horizontal - need to update the actual cell structures
-    //       newCellIds = array.cellIds.map((cellId, index) => {
-    //         const cell = newStructures.get(cellId) as CellStructure
+    //       newCellIds = array.itemIds.map((itemId, index) => {
+    //         const cell = newStructures.get(itemId) as CellStructure
     //         if (cell) {
     //           const updatedCell = {
     //             ...cell,
     //             startPosition: { row: startPosition.row, col: startPosition.col + index },
     //             endPosition: { row: startPosition.row, col: startPosition.col + index }
     //           }
-    //           newStructures.set(cellId, updatedCell)
+    //           newStructures.set(itemId, updatedCell)
     //         }
-    //         return cellId
+    //         return itemId
     //       })
     //     }
         
@@ -474,7 +745,7 @@ export const useStructureOperations = (
     //       ...array,
     //       direction: newDirection,
     //       endPosition: newEndPosition,
-    //       cellIds: newCellIds
+    //       itemIds: newCellIds
     //     }
         
     //     newStructures.set(arrayId, updatedArray)
@@ -538,8 +809,10 @@ export const useStructureOperations = (
     getStructureAtPositionSafe,
     updateStructureName,
     updateStructureFormula,
+    updateArrayContentType,
     triggerRecalculation,
     rotateArray,
-    deleteStructure
+    deleteStructure,
+    dependencyManager // Export the dependency manager so it can be passed to useCellOperations
   }
 }

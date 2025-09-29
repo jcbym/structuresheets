@@ -331,10 +331,10 @@ export const useResizeHandlers = ({
           if (finalRows !== currentRows || finalCols !== currentCols) {
             // Handle array resizing with proper cell substructure management
             const array = arrayStructure as ArrayStructure
-            const originalSize = array.cellIds.length
+            const originalSize = array.itemIds.length
             const finalSize = arrayStructure.direction === 'horizontal' ? finalCols : finalRows
             
-            // Create new cellIds array for the resized array
+            // Create new itemIds array for the resized array
             const newCellIds: (string | null)[] = []
             
             // Track cells that need to be removed from the array (and placed back on grid)
@@ -350,16 +350,16 @@ export const useResizeHandlers = ({
                 cellCol = newStartPosition.col
               }
               
-              let cellId: string | null = null
+              let itemId: string | null = null
               
               // Check if this position was within the original array bounds
-              if (i < originalSize && array.cellIds[i]) {
+              if (i < originalSize && array.itemIds[i]) {
                 // This cell was already in the array - keep its reference
-                cellId = array.cellIds[i]
+                itemId = array.itemIds[i]
                 
                 // Update the cell's position if the array moved
-                if (cellId) {
-                  const existingCell = structures.get(cellId) as CellStructure
+                if (itemId) {
+                  const existingCell = structures.get(itemId) as CellStructure
                   if (existingCell && (existingCell.startPosition.row !== cellRow || existingCell.startPosition.col !== cellCol)) {
                     setStructures((prev: StructureMap) => {
                       const newStructures = new Map(prev)
@@ -367,7 +367,7 @@ export const useResizeHandlers = ({
                         ...existingCell,
                         startPosition: { row: cellRow, col: cellCol }
                       }
-                      newStructures.set(cellId!, updatedCell)
+                      newStructures.set(itemId!, updatedCell)
                       return newStructures
                     })
                   }
@@ -377,7 +377,7 @@ export const useResizeHandlers = ({
                 const existingStructure = getStructureAtPosition(cellRow, cellCol, positions, structures)
                 if (existingStructure && existingStructure.type === 'cell') {
                   // Existing cell - add it to the array
-                  cellId = existingStructure.id
+                  itemId = existingStructure.id
                 } else {
                   // No existing cell - check if there's a value from any other structure
                   const existingValue = getCellValue(cellRow, cellCol, structures, positions)
@@ -396,21 +396,21 @@ export const useResizeHandlers = ({
                       newStructures.set(newCellId, newCell)
                       return newStructures
                     })
-                    cellId = newCellId
+                    itemId = newCellId
                   }
                 }
               }
               
-              newCellIds.push(cellId)
+              newCellIds.push(itemId)
             }
             
             // Handle cells that are now outside the array bounds (shrinking case)
-            if (array.cellIds) {
-              for (let i = 0; i < array.cellIds.length; i++) {
-                const cellId = array.cellIds[i]
-                if (cellId && i >= finalSize) {
+            if (array.itemIds) {
+              for (let i = 0; i < array.itemIds.length; i++) {
+                const itemId = array.itemIds[i]
+                if (itemId && i >= finalSize) {
                   // This cell is now outside the array - remove it from array and place on grid
-                  const cell = structures.get(cellId) as CellStructure
+                  const cell = structures.get(itemId) as CellStructure
                   if (cell) {
                     // Calculate the new position for the removed cell
                     let newPosition: Position
@@ -436,7 +436,7 @@ export const useResizeHandlers = ({
               startPosition: newStartPosition,
               endPosition: newEndPosition,
               dimensions: { rows: finalRows, cols: finalCols },
-              cellIds: newCellIds
+              itemIds: newCellIds
             } as ArrayStructure
             
             // Update structures map
@@ -488,7 +488,7 @@ export const useResizeHandlers = ({
           const finalRows = newEndPosition.row - newStartPosition.row + 1
           const finalCols = newEndPosition.col - newStartPosition.col + 1
           
-          // Create new cellIds array for the resized table
+          // Create new itemIds array for the resized table
           const newCellIds: (string | null)[][] = []
           
           // Track cells that need to be removed from the table (and placed back on grid)
@@ -500,7 +500,7 @@ export const useResizeHandlers = ({
               const cellRow = newStartPosition.row + r
               const cellCol = newStartPosition.col + c
               
-              let cellId: string | null = null
+              let itemId: string | null = null
               
               // Check if this position was within the original table bounds
               const originalTableRow = cellRow - originalStartPosition.row
@@ -508,14 +508,14 @@ export const useResizeHandlers = ({
               
               if (originalTableRow >= 0 && originalTableRow < originalRows && 
                   originalTableCol >= 0 && originalTableCol < originalCols &&
-                  table.cellIds && table.cellIds[originalTableRow] && 
-                  table.cellIds[originalTableRow][originalTableCol]) {
+                  table.itemIds && table.itemIds[originalTableRow] && 
+                  table.itemIds[originalTableRow][originalTableCol]) {
                 // This cell was already in the table - keep its reference
-                cellId = table.cellIds[originalTableRow][originalTableCol]
+                itemId = table.itemIds[originalTableRow][originalTableCol]
                 
                 // Update the cell's position if the table moved
-                if (cellId) {
-                  const existingCell = structures.get(cellId) as CellStructure
+                if (itemId) {
+                  const existingCell = structures.get(itemId) as CellStructure
                   if (existingCell && (existingCell.startPosition.row !== cellRow || existingCell.startPosition.col !== cellCol)) {
                     setStructures((prev: StructureMap) => {
                       const newStructures = new Map(prev)
@@ -523,7 +523,7 @@ export const useResizeHandlers = ({
                         ...existingCell,
                         startPosition: { row: cellRow, col: cellCol }
                       }
-                      newStructures.set(cellId!, updatedCell)
+                      newStructures.set(itemId!, updatedCell)
                       return newStructures
                     })
                   }
@@ -533,7 +533,7 @@ export const useResizeHandlers = ({
                 const existingStructure = getStructureAtPosition(cellRow, cellCol, positions, structures)
                 if (existingStructure && existingStructure.type === 'cell') {
                   // Existing cell - add it to the table
-                  cellId = existingStructure.id
+                  itemId = existingStructure.id
                 } else {
                   // No existing cell - check if there's a value from any other structure
                   const existingValue = getCellValue(cellRow, cellCol, structures, positions)
@@ -552,22 +552,22 @@ export const useResizeHandlers = ({
                       newStructures.set(newCellId, newCell)
                       return newStructures
                     })
-                    cellId = newCellId
+                    itemId = newCellId
                   }
                 }
               }
               
-              rowCells.push(cellId)
+              rowCells.push(itemId)
             }
             newCellIds.push(rowCells)
           }
           
           // Handle cells that are now outside the table bounds (shrinking case)
-          if (table.cellIds) {
-            for (let r = 0; r < table.cellIds.length; r++) {
-              for (let c = 0; c < table.cellIds[r].length; c++) {
-                const cellId = table.cellIds[r][c]
-                if (cellId) {
+          if (table.itemIds) {
+            for (let r = 0; r < table.itemIds.length; r++) {
+              for (let c = 0; c < table.itemIds[r].length; c++) {
+                const itemId = table.itemIds[r][c]
+                if (itemId) {
                   const cellRow = originalStartPosition.row + r
                   const cellCol = originalStartPosition.col + c
                   
@@ -580,7 +580,7 @@ export const useResizeHandlers = ({
                   
                   if (!isStillInTable) {
                     // This cell is now outside the table - remove it from table and place on grid
-                    const cell = structures.get(cellId) as CellStructure
+                    const cell = structures.get(itemId) as CellStructure
                     if (cell) {
                       // Calculate the new position for the removed cell
                       const newPosition: Position = {
@@ -601,7 +601,7 @@ export const useResizeHandlers = ({
             startPosition: newStartPosition,
             endPosition: newEndPosition,
             dimensions: { rows: finalRows, cols: finalCols },
-            cellIds: newCellIds
+            itemIds: newCellIds
           } as TableStructure
             
           // Update structures map

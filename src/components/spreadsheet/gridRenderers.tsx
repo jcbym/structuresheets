@@ -12,6 +12,7 @@ import {
   isCellInRange,
   isTableHeader,
   getStructureAtPosition,
+  getStructuresAtPosition,
   getCellValue,
   getEndPosition,
   getCellKey
@@ -44,6 +45,8 @@ export interface GridRenderProps {
   handleColumnHeaderMouseDown: (row: number, col: number, e: React.MouseEvent) => void
   handleMouseDown: (row: number, col: number, e: React.MouseEvent) => void
   setHoveredStructure: React.Dispatch<React.SetStateAction<Structure | null>>
+  setSelectedRange: React.Dispatch<React.SetStateAction<{start: {row: number, col: number}, end: {row: number, col: number}} | null>>
+  setStartEditing: React.Dispatch<React.SetStateAction<{row: number, col: number} | null>>
   
   // Cell content renderer
   renderCell: (
@@ -51,9 +54,13 @@ export interface GridRenderProps {
     col: number, 
     value: string, 
     isSelected: boolean, 
-    structure?: Structure,
+    structures?: Structure[],
     isInRange?: boolean
   ) => React.ReactElement
+  
+  // Cell editing handlers
+  handleCellClick?: (row: number, col: number) => void
+  handleCellDoubleClick?: (row: number, col: number) => void
 }
 
 /**
@@ -142,6 +149,8 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
     handleColumnHeaderMouseDown,
     handleMouseDown,
     setHoveredStructure,
+    setSelectedRange,
+    setStartEditing,
     renderCell
   } = props
   
@@ -181,27 +190,40 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
 
     // Data cells
     for (let colIndex = startCol; colIndex < endCol; colIndex++) {
-      // Skip cells that are covered by resized cells
-      if (isCellCoveredByResizedCell(rowIndex, colIndex, structures)) {
-        continue
-      }
-
       const isSelected = selectedRange?.start.row === rowIndex && selectedRange?.start.col === colIndex && selectedRange?.end.row === rowIndex && selectedRange?.end.col === colIndex
       const isInRange = isCellInRange(rowIndex, colIndex, selectedRange)
-      const structure = getStructureAtPosition(rowIndex, colIndex, positions, structures)
+      const structuresAtPosition = getStructuresAtPosition(rowIndex, colIndex, positions, structures)
+      
+      // Skip cells that are covered by resized cells - use enhanced function with structures at position
+      if (isCellCoveredByResizedCell(rowIndex, colIndex, structures, structuresAtPosition)) {
+        continue
+      }
+      
+      // Get primary structure for layout calculations - prioritize cell structures for merged cell handling
+      let primaryStructure: Structure | undefined = undefined
+      if (structuresAtPosition.length > 0) {
+        // First, look for cell structures (needed for merged cell layout calculations)
+        const cellStructure = structuresAtPosition.find(s => s.type === 'cell')
+        if (cellStructure) {
+          primaryStructure = cellStructure
+        } else {
+          // Fall back to first structure if no cell structure found
+          primaryStructure = structuresAtPosition[0]
+        }
+      }
       
       let cellWidth = getColumnWidth(colIndex, columnWidths)
       let cellHeight = getRowHeight(rowIndex, rowHeights)
       
       // If this is a resized cell, calculate the total width and height
-      if (structure && structure.type === 'cell') {
-        const { startPosition, dimensions } = structure
+      if (primaryStructure && primaryStructure.type === 'cell') {
+        const { startPosition, dimensions } = primaryStructure
         const endPosition = getEndPosition(startPosition, dimensions)
         const rows = endPosition.row - startPosition.row + 1
         const cols = endPosition.col - startPosition.col + 1
         if ((rows > 1 || cols > 1) && 
-            rowIndex === structure.startPosition.row && 
-            colIndex === structure.startPosition.col) {
+            rowIndex === primaryStructure.startPosition.row && 
+            colIndex === primaryStructure.startPosition.col) {
           // This is the top-left corner of a resized cell - calculate total dimensions
           cellWidth = 0
           for (let c = 0; c < cols; c++) {
@@ -216,7 +238,9 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
       
       // Add green column borders for tables (but not individual cell selection borders)
       let borderClass = 'border border-gray-200'
-      if (structure && structure.type === 'table') {
+      // Check if any structure at this position is a table for border styling
+      const hasTableStructure = structuresAtPosition.some(s => s.type === 'table')
+      if (hasTableStructure) {
         borderClass = `border-l-1 border-r-1 border-t border-b ${TABLE_COLOR.BORDER} border-t-gray-200 border-b-gray-200`
       }
 
@@ -232,16 +256,16 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
             height: cellHeight,
             minWidth: cellWidth,
             minHeight: cellHeight,
-            zIndex: structure && structure.type === 'cell' && (structure.dimensions.rows > 1 || structure.dimensions.cols > 1) ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
+            zIndex: primaryStructure && primaryStructure.type === 'cell' && (primaryStructure.dimensions.rows > 1 || primaryStructure.dimensions.cols > 1) ? Z_INDEX.MERGED_CELL : Z_INDEX.CELL,
           }}
           onMouseEnter={() => {
             handleMouseEnter(rowIndex, colIndex)
             if (isTableHeader(rowIndex, colIndex, structures, positions)) {
               handleHeaderHover(rowIndex, colIndex, true)
             }
-            // Set hovered structure if this cell is part of a structure
-            if (structure) {
-              setHoveredStructure(structure)
+            // Set hovered structure if this cell is part of a structure (use primary structure)
+            if (primaryStructure) {
+              setHoveredStructure(primaryStructure)
             }
           }}
           onMouseLeave={() => {
@@ -255,6 +279,24 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
             if (isTableHeader(rowIndex, colIndex, structures, positions)) {
               e.stopPropagation()
               handleColumnHeaderClick(rowIndex, colIndex)
+            } else {
+              // Call the new cell editing system for regular cells
+              if (props.handleCellClick) {
+                props.handleCellClick(rowIndex, colIndex)
+              }
+            }
+          }}
+          onDoubleClick={(e) => {
+            if (isTableHeader(rowIndex, colIndex, structures, positions)) {
+              e.stopPropagation()
+              // Allow double-click to start editing header cells directly
+              setSelectedRange({ start: { row: rowIndex, col: colIndex }, end: { row: rowIndex, col: colIndex } })
+              setStartEditing({ row: rowIndex, col: colIndex })
+            } else {
+              // Call the new cell editing system for regular cells
+              if (props.handleCellDoubleClick) {
+                props.handleCellDoubleClick(rowIndex, colIndex)
+              }
             }
           }}
           onMouseDown={(e) => {
@@ -262,6 +304,8 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
               e.stopPropagation()
               handleColumnHeaderMouseDown(rowIndex, colIndex, e)
             } else {
+              // Let the new cell editing system handle the click through its renderCell function
+              // But still call the old handler for drag-and-drop functionality
               handleMouseDown(rowIndex, colIndex, e)
             }
           }}
@@ -271,7 +315,7 @@ export function renderRows(props: GridRenderProps): React.ReactElement[] {
             colIndex,
             getCellValue(rowIndex, colIndex, structures, positions),
             isSelected,
-            structure,
+            structuresAtPosition,
             isInRange
           )}
         </div>

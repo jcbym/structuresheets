@@ -73,6 +73,13 @@ export class DependencyManager {
     return dependents ? Array.from(dependents) : [];
   }
 
+  // Get structures that depend on a specific table column
+  getDependentsOfTableColumn(tableName: string, columnName: string): string[] {
+    const tableColumnKey = `tableColumn:${tableName}:${columnName}`;
+    const dependents = this.reverseDependencies.get(tableColumnKey);
+    return dependents ? Array.from(dependents) : [];
+  }
+
   // Get structures that depend on cells in a range
   getDependentsOfRange(startRow: number, startCol: number, endRow: number, endCol: number): Set<string> {
     const dependents = new Set<string>();
@@ -130,6 +137,45 @@ export class DependencyManager {
     return this.topologicalSort(Array.from(toRecalculate));
   }
 
+  // Find structures that contain a specific cell (for structure-level dependency tracking)
+  getStructuresContainingCell(row: number, col: number, structures: Map<string, any>): string[] {
+    const containingStructures: string[] = [];
+    
+    for (const [structureId, structure] of structures) {
+      if (structure.name && this.structureContainsCell(structure, row, col)) {
+        containingStructures.push(structureId);
+      }
+    }
+    
+    return containingStructures;
+  }
+
+  // Enhanced calculation order that considers both cell and structure dependencies
+  getEnhancedCalculationOrder(
+    changedCells: Array<{row: number, col: number}>, 
+    structures: Map<string, any>
+  ): string[] {
+    const toRecalculate = new Set<string>();
+    
+    // Find all structures that depend on the changed cells (existing logic)
+    for (const cell of changedCells) {
+      const cellDependents = this.getDependentsOfCell(cell.row, cell.col);
+      cellDependents.forEach(dep => toRecalculate.add(dep));
+    }
+    
+    // NEW: Find structures containing the changed cells and get their dependents
+    for (const cell of changedCells) {
+      const containingStructures = this.getStructuresContainingCell(cell.row, cell.col, structures);
+      for (const structureId of containingStructures) {
+        const structureDependents = this.getDependentsOfStructure(structureId);
+        structureDependents.forEach(dep => toRecalculate.add(dep));
+      }
+    }
+    
+    // Perform topological sort to get correct calculation order
+    return this.topologicalSort(Array.from(toRecalculate));
+  }
+
   // Private helper methods
 
   private getDependencyKey(dependency: Dependency): string {
@@ -140,6 +186,8 @@ export class DependencyManager {
         return `range:${dependency.startRow}:${dependency.startCol}:${dependency.endRow}:${dependency.endCol}`;
       case 'structure':
         return `structure:${dependency.structureId}`;
+      case 'tableColumn':
+        return `tableColumn:${dependency.tableName}:${dependency.columnName}`;
     }
   }
 
@@ -191,6 +239,20 @@ export class DependencyManager {
     }
 
     return result;
+  }
+
+  // Helper to check if a structure contains a specific cell
+  private structureContainsCell(structure: any, row: number, col: number): boolean {
+    if (!structure.startPosition || !structure.dimensions) {
+      return false;
+    }
+    
+    const { startPosition, dimensions } = structure;
+    const endRow = startPosition.row + dimensions.rows - 1;
+    const endCol = startPosition.col + dimensions.cols - 1;
+    
+    return row >= startPosition.row && row <= endRow && 
+           col >= startPosition.col && col <= endCol;
   }
 
   // Debug method to get current dependency graph state

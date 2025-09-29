@@ -7,7 +7,10 @@ import {
   isValidMoveTarget,
   getEndPosition,
   removeStructureFromPositionMap,
-  addStructureToPositionMap
+  addStructureToPositionMap,
+  getStructureHierarchy,
+  getNextStructureInHierarchy,
+  isSamePosition
 } from '../utils/structureUtils'
 import { 
   getColumnPosition,
@@ -19,7 +22,7 @@ import {
 } from '../utils/sheetUtils'
 import { MAX_ROWS } from '../constants'
 
-interface DragAndDropHandlersProps {
+interface StructureClickHandlersProps {
   structures: StructureMap
   positions: PositionMap
   selectedStructure: Structure | null
@@ -40,6 +43,19 @@ interface DragAndDropHandlersProps {
   rowHeights: Map<number, number>
   containerRef: React.RefObject<HTMLDivElement>
   
+  // Recursive selection state
+  selectedStructureLevel: number
+  lastClickedPosition: Position | null
+  
+  // Cell editing function to stop editing when structure dragging starts
+  stopCellEditing: (saveValue?: boolean) => void
+  
+  // Function to check if a cell is currently being edited
+  isCellBeingEdited: (row: number, col: number) => boolean
+  
+  // Grid click handler for reference insertion
+  onGridClick?: (row: number, col: number, structure?: Structure) => boolean
+  
   // State setters
   setSelectedStructure: React.Dispatch<React.SetStateAction<Structure | null>>
   setSelectedColumn: React.Dispatch<React.SetStateAction<{tableId: string, columnIndex: number} | null>>
@@ -59,10 +75,11 @@ interface DragAndDropHandlersProps {
   setColumnHeaderHandledInMouseDown: React.Dispatch<React.SetStateAction<boolean>>
   setStructures: React.Dispatch<React.SetStateAction<StructureMap>>
   setPositions: React.Dispatch<React.SetStateAction<PositionMap>>
-  setEditingCells: React.Dispatch<React.SetStateAction<Set<string>>>
+  setSelectedStructureLevel: React.Dispatch<React.SetStateAction<number>>
+  setLastClickedPosition: React.Dispatch<React.SetStateAction<Position | null>>
 }
 
-export const useDragAndDropHandlers = ({
+export const useStructureClickHandlers = ({
   structures,
   positions,
   selectedStructure,
@@ -82,6 +99,11 @@ export const useDragAndDropHandlers = ({
   columnWidths,
   rowHeights,
   containerRef,
+  selectedStructureLevel,
+  lastClickedPosition,
+  stopCellEditing,
+  isCellBeingEdited,
+  onGridClick,
   setSelectedStructure,
   setSelectedColumn,
   setSelectedRange,
@@ -100,16 +122,30 @@ export const useDragAndDropHandlers = ({
   setColumnHeaderHandledInMouseDown,
   setStructures,
   setPositions,
-  setEditingCells
-}: DragAndDropHandlersProps) => {
+  setSelectedStructureLevel,
+  setLastClickedPosition
+}: StructureClickHandlersProps) => {
 
   // Selecting a structure should also clear text editing and range
   const selectStructure = React.useCallback((structure: Structure) => {
     setSelectedStructure(structure)
     setStartEditing(null)
     setSelectedRange(null)
-    setEditingCells(new Set())
-  }, [setSelectedStructure, setStartEditing, setSelectedRange, setEditingCells])
+  }, [setSelectedStructure, setStartEditing, setSelectedRange])
+
+  // Helper function to check if two positions are within the same structure at a given hierarchy level
+  const isInSameStructureAtLevel = React.useCallback((pos1: Position, pos2: Position, level: number) => {
+    const hierarchy1 = getStructureHierarchy(pos1.row, pos1.col, positions, structures)
+    const hierarchy2 = getStructureHierarchy(pos2.row, pos2.col, positions, structures)
+    
+    // Both positions must have structures at the specified level
+    if (hierarchy1.length <= level || hierarchy2.length <= level) {
+      return false
+    }
+    
+    // Check if the structure at the specified level is the same
+    return hierarchy1[level].id === hierarchy2[level].id
+  }, [positions, structures])
 
   // Shared function to start structure dragging with precise offset calculation
   const startStructureDrag = React.useCallback((structure: Structure, e: React.MouseEvent, fallbackRow: number = 0, fallbackCol: number = 0) => {
@@ -179,21 +215,85 @@ export const useDragAndDropHandlers = ({
       return // Don't handle mouse down for table headers
     }
 
-    // Check if the clicked cell is part of a structure
-    const structure = getStructureAtPosition(row, col, positions, structures)
+    // Try reference insertion first if onGridClick is available
+    if (onGridClick) {
+      const structure = getStructureAtPosition(row, col, positions, structures)
+      const handled = onGridClick(row, col, structure)
+      if (handled) return // Stop here if reference was inserted - no selection should happen
+    }
+
+    // Get all structures at this position for hierarchical selection
+    const hierarchy = getStructureHierarchy(row, col, positions, structures)
     
-    if (structure) {
+    if (hierarchy.length > 0) {
       // Always clear column selection when clicking on any structure cell (including table cells)
       setSelectedColumn(null)
       
-      // Start dragging immediately for any structure (selected or not)
+      // Check if this is a click on the same position as the last click
+      const clickedPosition = { row, col }
+      const isSamePositionClick = isSamePosition(clickedPosition, lastClickedPosition)
+      
+      let structureToSelect: Structure
+      let newLevel: number
+      let shouldStartEditing = false
+      
+      if (isSamePositionClick && selectedStructure && hierarchy.some(s => s.id === selectedStructure.id)) {
+        // Same position click with selected structure in hierarchy
+        if (selectedStructureLevel === hierarchy.length - 1) {
+          // We're at the bottom of the hierarchy - start editing instead of advancing
+          shouldStartEditing = true
+          structureToSelect = selectedStructure
+          newLevel = selectedStructureLevel
+        } else {
+          // Not at bottom yet - advance to next level
+          const nextResult = getNextStructureInHierarchy(selectedStructure, hierarchy, selectedStructureLevel)
+          structureToSelect = nextResult.structure!
+          newLevel = nextResult.level
+        }
+      } else if (lastClickedPosition && 
+                 selectedStructure && 
+                 selectedStructureLevel < hierarchy.length &&
+                 isInSameStructureAtLevel(clickedPosition, lastClickedPosition, selectedStructureLevel)) {
+        // Different position but within the same structure at current level - maintain level
+        structureToSelect = hierarchy[selectedStructureLevel]
+        newLevel = selectedStructureLevel
+      } else {
+        // Different position or no current selection - start at level 0 (outermost)
+        structureToSelect = hierarchy[0]
+        newLevel = 0
+      }
+      
+      // Update the tracking state
+      setLastClickedPosition(clickedPosition)
+      setSelectedStructureLevel(newLevel)
+      
+      if (shouldStartEditing) {
+        // Check if this cell is already being edited
+        if (isCellBeingEdited(row, col)) {
+          // Don't disrupt editing - just return early
+          return
+        }
+        
+        // Start editing the cell instead of dragging the structure
+        setSelectedRange({ start: { row, col }, end: { row, col } })
+        setStartEditing({ row, col })
+        e.preventDefault()
+        setIsDragging(true)
+        setDragStart({ row, col })
+        return
+      }
+      
+      // Start dragging for the selected structure (normal hierarchy selection)
+      // Stop any cell editing before starting structure drag
+      stopCellEditing(true)
+      
       e.preventDefault()
       setIsDraggingStructure(true)
-      setDraggedStructure(structure)
+      setDraggedStructure(structureToSelect)
       
       // For merged cells (cells that span multiple grid positions), calculate the precise click position
-      if (structure.type === 'cell' && 
-          (structure.dimensions.rows > 1 || structure.dimensions.cols > 1)) {
+      if (structureToSelect.type === 'cell' && 
+          (structureToSelect.dimensions.rows > 1 || structureToSelect.dimensions.cols > 1)) {
         
         // This is a merged cell - calculate precise offset based on mouse position
         if (containerRef.current) {
@@ -221,34 +321,41 @@ export const useDragAndDropHandlers = ({
           
           // Use the precise click position for offset calculation
           setDragOffset({ 
-            row: clickRow - structure.startPosition.row, 
-            col: clickCol - structure.startPosition.col 
+            row: clickRow - structureToSelect.startPosition.row, 
+            col: clickCol - structureToSelect.startPosition.col 
           })
         } else {
           // Fallback to using the provided row/col (top-left corner)
           setDragOffset({ 
-            row: row - structure.startPosition.row, 
-            col: col - structure.startPosition.col 
+            row: row - structureToSelect.startPosition.row, 
+            col: col - structureToSelect.startPosition.col 
           })
         }
       } else {
         // For non-merged cells or other structures, use the simple calculation
         setDragOffset({ 
-          row: row - structure.startPosition.row, 
-          col: col - structure.startPosition.col 
+          row: row - structureToSelect.startPosition.row, 
+          col: col - structureToSelect.startPosition.col 
         })
       }
       
-      // Also select the structure if it wasn't already selected
-      if (!selectedStructure || selectedStructure.id !== structure.id) {
-        selectStructure(structure)
-      }
+      // Select the structure (this will clear other selections)
+      selectStructure(structureToSelect)
       
       return
     } else {
       // Click on empty cell - clear all selections and select cell normally
+      
+      // Check if this cell is already being edited
+      if (isCellBeingEdited(row, col)) {
+        // Don't disrupt editing - just return early
+        return
+      }
+      
       setSelectedStructure(null)
       setSelectedColumn(null) // Clear column selection when clicking outside tables
+      setLastClickedPosition({ row, col }) // Track this position for consistency
+      setSelectedStructureLevel(0) // Reset level when clicking empty space
       setSelectedRange({ start: { row, col }, end: { row, col } })
       setStartEditing({ row, col }) // Start editing immediately for non-structure cells
       
@@ -257,10 +364,12 @@ export const useDragAndDropHandlers = ({
       setDragStart({ row, col })
     }
   }, [
-    structures, positions, selectedStructure, containerRef, scrollLeft, scrollTop, 
-    rowHeights, columnWidths, setIsDraggingStructure, setDraggedStructure, setDragOffset,
-    setDropTarget, setLastValidDropTarget, setSelectedColumn, selectStructure,
-    setSelectedStructure, setSelectedRange, setStartEditing, setIsDragging, setDragStart
+    structures, positions, selectedStructure, selectedStructureLevel, lastClickedPosition,
+    containerRef, scrollLeft, scrollTop, rowHeights, columnWidths, setIsDraggingStructure, 
+    setDraggedStructure, setDragOffset, setDropTarget, setLastValidDropTarget, 
+    setSelectedColumn, selectStructure, setSelectedStructure, setSelectedRange, 
+    setStartEditing, setIsDragging, setDragStart, setLastClickedPosition, setSelectedStructureLevel,
+    isInSameStructureAtLevel, stopCellEditing, onGridClick
   ])
 
   // Handle column header clicks
@@ -283,7 +392,7 @@ export const useDragAndDropHandlers = ({
         selectedColumn.columnIndex === columnIndex
       
       if (isSameColumnSelected) {
-        // Second click on already selected column - start editing the cell
+        // Second click on already selected column - start editing the header cell
         setSelectedRange({ start: { row, col }, end: { row, col } })
         setStartEditing({ row, col })
       } else {
@@ -383,6 +492,39 @@ export const useDragAndDropHandlers = ({
     rowHeights, columnWidths, structures, positions, setDropTarget, setLastValidDropTarget
   ])
 
+  // Process cell range selection during drag
+  const processCellRangeSelection = React.useCallback((e: MouseEvent, isDragging: boolean, dragStart: {row: number, col: number} | null) => {
+    if (!isDragging || !dragStart || !containerRef.current) return
+    
+    const containerRect = containerRef.current.getBoundingClientRect()
+    const relativeX = e.clientX - containerRect.left + scrollLeft
+    const relativeY = e.clientY - containerRect.top + scrollTop
+    
+    // Convert pixel position to cell position
+    let currentRow = 0
+    let currentCol = 0
+    
+    // Calculate current row
+    let currentY = getHeaderHeight()
+    while (currentRow < MAX_ROWS && currentY + getRowHeight(currentRow, rowHeights) < relativeY) {
+      currentY += getRowHeight(currentRow, rowHeights)
+      currentRow++
+    }
+    
+    // Calculate current column
+    let currentX = getHeaderWidth()
+    while (currentCol < 26 && currentX + getColumnWidth(currentCol, columnWidths) < relativeX) {
+      currentX += getColumnWidth(currentCol, columnWidths)
+      currentCol++
+    }
+    
+    // Update selected range to span from drag start to current position
+    setSelectedRange({
+      start: dragStart,
+      end: { row: currentRow, col: currentCol }
+    })
+  }, [containerRef, scrollLeft, scrollTop, rowHeights, columnWidths, setSelectedRange])
+
   // Process column drag and drop movement  
   const processColumnDragMove = React.useCallback((e: MouseEvent) => {
     if (draggedColumn && containerRef.current) {
@@ -463,6 +605,7 @@ export const useDragAndDropHandlers = ({
       handleColumnHeaderClick,
       handleColumnHeaderMouseDown,
       processStructureDragMove,
+      processCellRangeSelection,
       processColumnDragMove
     },
     utils: {

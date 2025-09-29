@@ -79,10 +79,10 @@ export const getTableCells = (tableId: string, structures: StructureMap): CellSt
   if (!table || table.type !== 'table') return []
   
   const cells: CellStructure[] = []
-  for (const row of table.cellIds) {
-    for (const cellId of row) {
-      if (cellId) {
-        const cell = structures.get(cellId) as CellStructure
+  for (const row of table.itemIds) {
+    for (const itemId of row) {
+      if (itemId) {
+        const cell = structures.get(itemId) as CellStructure
         if (cell) {
           cells.push(cell)
         }
@@ -97,9 +97,9 @@ export const getArrayCells = (arrayId: string, structures: StructureMap): CellSt
   if (!array || array.type !== 'array') return []
   
   const cells: CellStructure[] = []
-  for (const cellId of array.cellIds) {
-    if (cellId) {
-      const cell = structures.get(cellId) as CellStructure
+  for (const itemId of array.itemIds) {
+    if (itemId) {
+      const cell = structures.get(itemId) as CellStructure
       if (cell) {
         cells.push(cell)
       }
@@ -112,14 +112,14 @@ export const getCellFromTable = (tableId: string, row: number, col: number, stru
   const table = structures.get(tableId) as TableStructure
   if (!table || table.type !== 'table') return undefined
   
-  if (row < 0 || row >= table.cellIds.length || col < 0 || col >= table.cellIds[row].length) {
+  if (row < 0 || row >= table.itemIds.length || col < 0 || col >= table.itemIds[row].length) {
     return undefined
   }
   
-  const cellId = table.cellIds[row][col]
-  if (!cellId) return undefined
+  const itemId = table.itemIds[row][col]
+  if (!itemId) return undefined
   
-  return structures.get(cellId) as CellStructure
+  return structures.get(itemId) as CellStructure
 }
 
 // Cell and structure utilities - now computes table cell positions dynamically
@@ -148,12 +148,13 @@ export const getCellValue = (row: number, col: number, structureMap: StructureMa
       // For merged cells (dimensions > 1x1), only return value at the top-left position
       if (structure.dimensions.rows > 1 || structure.dimensions.cols > 1) {
         if (row === structure.startPosition.row && col === structure.startPosition.col) {
+          // For merged cells, return the value (which now contains formula results)
           return structure.value || ''
         }
         // For other positions within the merged cell, return empty string
         return ''
       } else {
-        // For regular 1x1 cells, return the value
+        // For regular 1x1 cells, return the value (which now contains formula results)
         return structure.value || ''
       }
     } else if (structure.type === 'table') {
@@ -166,13 +167,13 @@ export const getCellValue = (row: number, col: number, structureMap: StructureMa
       if (tableRow >= 0 && tableRow < table.dimensions.rows && 
           tableCol >= 0 && tableCol < table.dimensions.cols) {
         
-        // Check if cellIds array exists and has the position
-        if (table.cellIds && 
-            tableRow < table.cellIds.length && 
-            tableCol < table.cellIds[tableRow].length) {
-          const cellId = table.cellIds[tableRow][tableCol]
-          if (cellId) {
-            const cell = structureMap.get(cellId) as CellStructure
+        // Check if itemIds array exists and has the position
+        if (table.itemIds && 
+            tableRow < table.itemIds.length && 
+            tableCol < table.itemIds[tableRow].length) {
+          const itemId = table.itemIds[tableRow][tableCol]
+          if (itemId) {
+            const cell = structureMap.get(itemId) as CellStructure
             if (cell) {
               return cell.value || ''
             }
@@ -187,7 +188,7 @@ export const getCellValue = (row: number, col: number, structureMap: StructureMa
         }
       }
     } else if (structure.type === 'array') {
-      // For arrays, compute the offset to find the correct cell
+      // For arrays, handle different content types
       const array = structure as ArrayStructure
       const arrayRow = row - array.startPosition.row
       const arrayCol = col - array.startPosition.col
@@ -196,30 +197,67 @@ export const getCellValue = (row: number, col: number, structureMap: StructureMa
       if (arrayRow >= 0 && arrayRow < array.dimensions.rows && 
           arrayCol >= 0 && arrayCol < array.dimensions.cols) {
         
-        // Calculate the index in the cellIds array
-        let cellIndex: number
+        // Calculate the index in the array
+        let itemIndex: number
         if (array.direction === 'horizontal') {
-          cellIndex = arrayCol
+          itemIndex = arrayCol
         } else {
-          cellIndex = arrayRow
+          itemIndex = arrayRow
         }
         
-        // Check if cellIds array exists and has the position
-        if (array.cellIds && cellIndex < array.cellIds.length) {
-          const cellId = array.cellIds[cellIndex]
-          if (cellId) {
-            const cell = structureMap.get(cellId) as CellStructure
-            if (cell) {
-              return cell.value || ''
+        // Handle different content types
+        if (array.contentType === 'cells') {
+          // Legacy behavior: use itemIds array
+          if (array.itemIds && itemIndex < array.itemIds.length) {
+            const itemId = array.itemIds[itemIndex]
+            if (itemId) {
+              const cell = structureMap.get(itemId) as CellStructure
+              if (cell) {
+                return cell.value || ''
+              }
             }
           }
-        }
-        
-        // If no specific cell is found but we're within array bounds,
-        // look for any standalone cell at this exact position
-        const standaloneCell = structureMap.get(`cell-${row}-${col}`)
-        if (standaloneCell && standaloneCell.type === 'cell') {
-          return standaloneCell.value || ''
+          
+          // If no specific cell is found but we're within array bounds,
+          // look for any standalone cell at this exact position
+          const standaloneCell = structureMap.get(`cell-${row}-${col}`)
+          if (standaloneCell && standaloneCell.type === 'cell') {
+            return standaloneCell.value || ''
+          }
+        } else {
+          // Nested structures (templates): use itemIds array
+          if (array.itemIds && itemIndex < array.itemIds.length) {
+            const itemId = array.itemIds[itemIndex]
+            if (itemId) {
+              const nestedStructure = structureMap.get(itemId)
+              if (nestedStructure && nestedStructure.type === 'template') {
+                // For template structures, check if position is within bounds
+                const nestedEndPos = getEndPosition(nestedStructure.startPosition, nestedStructure.dimensions)
+                if (row >= nestedStructure.startPosition.row && row <= nestedEndPos.row &&
+                    col >= nestedStructure.startPosition.col && col <= nestedEndPos.col) {
+                  // For templates, we need to get the value from template content
+                  // without causing recursion. Check for template overrides first.
+                  if (nestedStructure.type === 'template') {
+                    const templateInstance = nestedStructure as TemplateStructure
+                    const relativePosition = convertToRelativePosition(
+                      { row, col },
+                      templateInstance.startPosition
+                    )
+                    const relativePositionKey = `${relativePosition.row}-${relativePosition.col}`
+                    const override = getCellOverride(templateInstance, relativePositionKey)
+                    
+                    if (override !== undefined) {
+                      return override
+                    }
+                  }
+                  
+                  // If no override, return empty for now to prevent recursion
+                  // Template content will be handled by the template rendering system
+                  return ''
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -232,6 +270,18 @@ export const getCellValue = (row: number, col: number, structureMap: StructureMa
 export const getStructureAtPosition = (row: number, col: number, positions: PositionMap, structures: StructureMap): Structure | undefined => {
   const structureIds = getStructureIdsAtPosition(row, col, positions)
   if (structureIds.length === 0) return undefined
+  
+  // If multiple structures exist at this position, prioritize non-template structures
+  // This ensures that cells inside template instances get the correct nested structure
+  // (like table or cell) rather than the parent template structure
+  if (structureIds.length > 1) {
+    for (const structureId of structureIds) {
+      const structure = structures.get(structureId)
+      if (structure && structure.type !== 'template') {
+        return structure
+      }
+    }
+  }
   
   // Return the first structure (maintains backward compatibility)
   const firstStructure = structures.get(structureIds[0])
@@ -584,7 +634,412 @@ const getTemplateInternalStructures = (
   return internalStructures
 }
 
-// Simplified structure moving function - consolidates moveCompleteStructure, moveStructureCells, and moveStructurePosition
+// =============================================================================
+// PUSHING AND COLLISION DETECTION UTILITIES
+// =============================================================================
+
+/**
+ * Detect structures that would be affected by expanding a structure in a given direction
+ */
+export const detectExpansionCollisions = (
+  expandingStructure: Structure,
+  direction: 'left' | 'right' | 'up' | 'down',
+  expansionAmount: number,
+  structures: StructureMap,
+  positions: PositionMap
+): Structure[] => {
+  const collisions: Structure[] = []
+  const { startPosition, dimensions } = expandingStructure
+  const endPosition = getEndPosition(startPosition, dimensions)
+  
+  // Calculate the area that will be occupied after expansion
+  let checkStartRow: number, checkEndRow: number, checkStartCol: number, checkEndCol: number
+  
+  switch (direction) {
+    case 'left':
+      checkStartRow = startPosition.row
+      checkEndRow = endPosition.row
+      checkStartCol = startPosition.col - expansionAmount
+      checkEndCol = startPosition.col - 1
+      break
+    case 'right':
+      checkStartRow = startPosition.row
+      checkEndRow = endPosition.row
+      checkStartCol = endPosition.col + 1
+      checkEndCol = endPosition.col + expansionAmount
+      break
+    case 'up':
+      checkStartRow = startPosition.row - expansionAmount
+      checkEndRow = startPosition.row - 1
+      checkStartCol = startPosition.col
+      checkEndCol = endPosition.col
+      break
+    case 'down':
+      checkStartRow = endPosition.row + 1
+      checkEndRow = endPosition.row + expansionAmount
+      checkStartCol = startPosition.col
+      checkEndCol = endPosition.col
+      break
+  }
+  
+  // Find all structures in the expansion area
+  for (let row = checkStartRow; row <= checkEndRow; row++) {
+    for (let col = checkStartCol; col <= checkEndCol; col++) {
+      if (row < 0 || col < 0) continue // Skip invalid positions
+      
+      const structuresAtPosition = getStructuresAtPosition(row, col, positions, structures)
+      for (const structure of structuresAtPosition) {
+        // Don't include the expanding structure itself
+        if (structure.id !== expandingStructure.id && 
+            !collisions.some(existing => existing.id === structure.id)) {
+          collisions.push(structure)
+        }
+      }
+    }
+  }
+  
+  return collisions
+}
+
+/**
+ * Calculate push direction based on expansion direction
+ */
+export const calculatePushDirection = (expansionDirection: 'left' | 'right' | 'up' | 'down'): 'left' | 'right' | 'up' | 'down' => {
+  // Structures get pushed in the same direction as the expansion
+  return expansionDirection
+}
+
+/**
+ * Find all structures that need to be moved in a recursive push operation
+ */
+export const findStructuresInPushChain = (
+  initialStructures: Structure[],
+  pushDirection: 'left' | 'right' | 'up' | 'down',
+  pushAmount: number,
+  structures: StructureMap,
+  positions: PositionMap,
+  visited: Set<string> = new Set()
+): Structure[] => {
+  const allStructuresToPush: Structure[] = [...initialStructures]
+  
+  for (const structure of initialStructures) {
+    if (visited.has(structure.id)) continue
+    visited.add(structure.id)
+    
+    // Calculate where this structure would move to
+    const newPosition = calculatePushedPosition(structure.startPosition, pushDirection, pushAmount)
+    
+    // Check if the new position would collide with other structures
+    const collisions = detectStructureCollisions(
+      structure,
+      newPosition,
+      structures,
+      positions,
+      new Set([...allStructuresToPush.map(s => s.id), ...visited])
+    )
+    
+    if (collisions.length > 0) {
+      // Recursively find structures that need to be pushed
+      const chainedStructures = findStructuresInPushChain(
+        collisions,
+        pushDirection,
+        pushAmount,
+        structures,
+        positions,
+        visited
+      )
+      
+      // Add new structures to the push list
+      for (const chainedStructure of chainedStructures) {
+        if (!allStructuresToPush.some(existing => existing.id === chainedStructure.id)) {
+          allStructuresToPush.push(chainedStructure)
+        }
+      }
+    }
+  }
+  
+  return allStructuresToPush
+}
+
+/**
+ * Calculate new position after being pushed
+ */
+export const calculatePushedPosition = (
+  position: Position,
+  direction: 'left' | 'right' | 'up' | 'down',
+  amount: number
+): Position => {
+  switch (direction) {
+    case 'left':
+      return { row: position.row, col: position.col - amount }
+    case 'right':
+      return { row: position.row, col: position.col + amount }
+    case 'up':
+      return { row: position.row - amount, col: position.col }
+    case 'down':
+      return { row: position.row + amount, col: position.col }
+  }
+}
+
+/**
+ * Detect if a structure at a new position would collide with existing structures
+ */
+export const detectStructureCollisions = (
+  structure: Structure,
+  newPosition: Position,
+  structures: StructureMap,
+  positions: PositionMap,
+  excludeIds: Set<string> = new Set()
+): Structure[] => {
+  const collisions: Structure[] = []
+  const endPosition = getEndPosition(newPosition, structure.dimensions)
+  
+  for (let row = newPosition.row; row <= endPosition.row; row++) {
+    for (let col = newPosition.col; col <= endPosition.col; col++) {
+      if (row < 0 || col < 0) continue // Skip invalid positions
+      
+      const structuresAtPosition = getStructuresAtPosition(row, col, positions, structures)
+      for (const existingStructure of structuresAtPosition) {
+        if (!excludeIds.has(existingStructure.id) && 
+            !collisions.some(existing => existing.id === existingStructure.id)) {
+          collisions.push(existingStructure)
+        }
+      }
+    }
+  }
+  
+  return collisions
+}
+
+/**
+ * Validate that a push operation is valid (no structures go out of bounds)
+ */
+export const validatePushOperation = (
+  structuresToPush: Structure[],
+  pushDirection: 'left' | 'right' | 'up' | 'down',
+  pushAmount: number,
+  maxRows: number = 1000,
+  maxCols: number = 26
+): boolean => {
+  for (const structure of structuresToPush) {
+    const newPosition = calculatePushedPosition(structure.startPosition, pushDirection, pushAmount)
+    const newEndPosition = getEndPosition(newPosition, structure.dimensions)
+    
+    // Check if any part of the structure would go out of bounds
+    if (newPosition.row < 0 || newPosition.col < 0 ||
+        newEndPosition.row >= maxRows || newEndPosition.col >= maxCols) {
+      return false
+    }
+  }
+  
+  return true
+}
+
+/**
+ * Apply pushing transformation to multiple structures using recursive approach
+ */
+export const pushStructures = (
+  structuresToPush: Structure[],
+  pushDirection: 'left' | 'right' | 'up' | 'down',
+  pushAmount: number,
+  structures: StructureMap,
+  positions: PositionMap
+): { structures: StructureMap, positions: PositionMap } => {
+  let newStructures = new Map(structures)
+  let newPositions = new Map(positions)
+  
+  // Move each structure using the recursive approach
+  for (const structure of structuresToPush) {
+    const newPosition = calculatePushedPosition(structure.startPosition, pushDirection, pushAmount)
+    
+    // Use the recursive move function which handles all complexity automatically
+    const result = moveStructureRecursively(structure, newPosition, newStructures, newPositions, true)
+    newStructures = result.structures
+    newPositions = result.positions
+  }
+  
+  return { structures: newStructures, positions: newPositions }
+}
+
+/**
+ * Main function to handle structure expansion with pushing
+ */
+export const expandStructureWithPushing = (
+  structureId: string,
+  direction: 'left' | 'right' | 'up' | 'down',
+  expansionAmount: number,
+  structures: StructureMap,
+  positions: PositionMap,
+  maxRows: number = 1000,
+  maxCols: number = 26
+): { structures: StructureMap, positions: PositionMap, success: boolean, reason?: string } => {
+  const structure = structures.get(structureId)
+  if (!structure) {
+    return { structures, positions, success: false, reason: 'Structure not found' }
+  }
+  
+  // 1. Detect initial collisions
+  const initialCollisions = detectExpansionCollisions(
+    structure,
+    direction,
+    expansionAmount,
+    structures,
+    positions
+  )
+  
+  if (initialCollisions.length === 0) {
+    // No collisions, proceed with normal expansion
+    return expandStructureNormally(structureId, direction, expansionAmount, structures, positions)
+  }
+  
+  // 2. Find all structures in the push chain
+  const pushDirection = calculatePushDirection(direction)
+  const allStructuresToPush = findStructuresInPushChain(
+    initialCollisions,
+    pushDirection,
+    expansionAmount,
+    structures,
+    positions
+  )
+  
+  // 3. Validate push operation
+  if (!validatePushOperation(allStructuresToPush, pushDirection, expansionAmount, maxRows, maxCols)) {
+    return { 
+      structures, 
+      positions, 
+      success: false, 
+      reason: 'Push operation would move structures out of bounds' 
+    }
+  }
+  
+  // 4. Apply pushing transformation
+  const pushResult = pushStructures(
+    allStructuresToPush,
+    pushDirection,
+    expansionAmount,
+    structures,
+    positions
+  )
+  
+  // 5. Expand the original structure
+  return expandStructureNormally(
+    structureId,
+    direction,
+    expansionAmount,
+    pushResult.structures,
+    pushResult.positions
+  )
+}
+
+/**
+ * Helper function to expand a structure normally (without collision detection)
+ */
+export const expandStructureNormally = (
+  structureId: string,
+  direction: 'left' | 'right' | 'up' | 'down',
+  expansionAmount: number,
+  structures: StructureMap,
+  positions: PositionMap
+): { structures: StructureMap, positions: PositionMap, success: boolean } => {
+  const structure = structures.get(structureId)
+  if (!structure) {
+    return { structures, positions, success: false }
+  }
+  
+  let newStructures = new Map(structures)
+  let newPositions = new Map(positions)
+  
+  // Remove structure from current position
+  newPositions = removeStructureFromPositionMap(structure, newPositions)
+  
+  // Calculate new dimensions and position
+  let newStartPosition = { ...structure.startPosition }
+  let newDimensions = { ...structure.dimensions }
+  
+  switch (direction) {
+    case 'left':
+      newStartPosition.col -= expansionAmount
+      newDimensions.cols += expansionAmount
+      break
+    case 'right':
+      newDimensions.cols += expansionAmount
+      break
+    case 'up':
+      newStartPosition.row -= expansionAmount
+      newDimensions.rows += expansionAmount
+      break
+    case 'down':
+      newDimensions.rows += expansionAmount
+      break
+  }
+  
+  // Update structure with new dimensions and position
+  const updatedStructure = {
+    ...structure,
+    startPosition: newStartPosition,
+    dimensions: newDimensions
+  }
+  
+  // Handle itemIds update for tables and arrays
+  if (structure.type === 'table' && 'itemIds' in structure) {
+    const tableStructure = structure as TableStructure
+    const newItemIds: (string | null)[][] = []
+    
+    for (let r = 0; r < newDimensions.rows; r++) {
+      const row: (string | null)[] = []
+      for (let c = 0; c < newDimensions.cols; c++) {
+        // Map new position to old position if it exists
+        let sourceRow = r
+        let sourceCol = c
+        
+        if (direction === 'left') sourceCol = c - expansionAmount
+        if (direction === 'up') sourceRow = r - expansionAmount
+        
+        if (sourceRow >= 0 && sourceRow < structure.dimensions.rows &&
+            sourceCol >= 0 && sourceCol < structure.dimensions.cols &&
+            tableStructure.itemIds && tableStructure.itemIds[sourceRow] &&
+            tableStructure.itemIds[sourceRow][sourceCol]) {
+          row.push(tableStructure.itemIds[sourceRow][sourceCol])
+        } else {
+          row.push(null)
+        }
+      }
+      newItemIds.push(row)
+    }
+    
+    (updatedStructure as TableStructure).itemIds = newItemIds
+  } else if (structure.type === 'array' && 'itemIds' in structure) {
+    const arrayStructure = structure as ArrayStructure
+    const newItemIds: (string | null)[] = []
+    const newSize = arrayStructure.direction === 'horizontal' ? newDimensions.cols : newDimensions.rows
+    
+    for (let i = 0; i < newSize; i++) {
+      let sourceIndex = i
+      
+      if ((direction === 'left' && arrayStructure.direction === 'horizontal') ||
+          (direction === 'up' && arrayStructure.direction === 'vertical')) {
+        sourceIndex = i - expansionAmount
+      }
+      
+      if (sourceIndex >= 0 && sourceIndex < arrayStructure.itemIds.length &&
+          arrayStructure.itemIds[sourceIndex]) {
+        newItemIds.push(arrayStructure.itemIds[sourceIndex])
+      } else {
+        newItemIds.push(null)
+      }
+    }
+    
+    (updatedStructure as ArrayStructure).itemIds = newItemIds
+  }
+  
+  // Update structures and positions
+  newStructures.set(structureId, updatedStructure)
+  newPositions = addStructureToPositionMap(updatedStructure, newPositions)
+  
+  return { structures: newStructures, positions: newPositions, success: true }
+}
+
+// Centralized structure moving function using recursive architecture
 export const moveStructure = (
   structure: Structure,
   targetPosition: Position,
@@ -592,429 +1047,11 @@ export const moveStructure = (
   positions: PositionMap,
   overwriteExisting: boolean = false
 ): { structures: StructureMap, positions: PositionMap } => {
-  const newStructures = new Map(structures)
-  
-  // Remove the old structure from position map
-  let newPositions = removeStructureFromPositionMap(structure, positions)
-  
-  // For templates, we need to find and move all internal structures
-  let templateInternalStructures: Structure[] = []
-  if (structure.type === 'template') {
-    templateInternalStructures = getTemplateInternalStructures(structure, structures, positions)
-    
-    // Remove all internal structures from their current positions
-    for (const internalStructure of templateInternalStructures) {
-      newStructures.delete(internalStructure.id)
-      newPositions = removeStructureFromPositionMap(internalStructure, newPositions)
-    }
-  }
-
-  // For tables and arrays, we need to clean up individual cell structures that were referenced by cellIds
-  if ((structure.type === 'table' || structure.type === 'array') && 'cellIds' in structure) {
-    const cellsToRemove: CellStructure[] = []
-    
-    if (structure.type === 'table') {
-      cellsToRemove.push(...getTableCells(structure.id, structures))
-    } else if (structure.type === 'array') {
-      // Only use the dedicated helper function for arrays - don't do additional position-based cleanup
-      // This prevents removing cells that might be legitimately shared or outside the cellIds array
-      cellsToRemove.push(...getArrayCells(structure.id, structures))
-    }
-    
-    // Remove individual cell structures that belong to this table/array
-    for (const cell of cellsToRemove) {
-      newStructures.delete(cell.id)
-      newPositions = removeStructureFromPositionMap(cell, newPositions)
-    }
-  }
-  
-  // For standalone cell structures, always clean up existing structures at target position to prevent overlapping
-  if (structure.type === 'cell') {
-    const endPosition = getEndPosition(targetPosition, structure.dimensions)
-    for (let row = targetPosition.row; row <= endPosition.row; row++) {
-      for (let col = targetPosition.col; col <= endPosition.col; col++) {
-        const existingStructures = getStructuresAtPosition(row, col, newPositions, newStructures)
-        for (const existingStructure of existingStructures) {
-          // Don't remove the structure we're moving
-          if (existingStructure.id !== structure.id) {
-            // If removing a cell structure, check if it's part of a table/array and update references
-            if (existingStructure.type === 'cell') {
-              // Find and update any tables that reference this cell
-              for (const [tableId, tableStructure] of newStructures) {
-                if (tableStructure.type === 'table' && 'cellIds' in tableStructure) {
-                  const table = tableStructure as TableStructure
-                  let updated = false
-                  for (let tRow = 0; tRow < table.cellIds.length; tRow++) {
-                    for (let tCol = 0; tCol < table.cellIds[tRow].length; tCol++) {
-                      if (table.cellIds[tRow][tCol] === existingStructure.id) {
-                        table.cellIds[tRow][tCol] = null
-                        updated = true
-                      }
-                    }
-                  }
-                  if (updated) {
-                    newStructures.set(tableId, { ...table })
-                  }
-                }
-                // Also check arrays
-                if (tableStructure.type === 'array' && 'cellIds' in tableStructure) {
-                  const array = tableStructure as ArrayStructure
-                  let updated = false
-                  for (let i = 0; i < array.cellIds.length; i++) {
-                    if (array.cellIds[i] === existingStructure.id) {
-                      array.cellIds[i] = null
-                      updated = true
-                    }
-                  }
-                  if (updated) {
-                    newStructures.set(tableId, { ...array })
-                  }
-                }
-              }
-            }
-            
-            newStructures.delete(existingStructure.id)
-            newPositions = removeStructureFromPositionMap(existingStructure, newPositions)
-          }
-        }
-      }
-    }
-  }
-
-  // Update the structure's position
-  const movedStructure = {
-    ...structure,
-    startPosition: targetPosition
-  }
-  
-  // For tables and arrays, update the cellIds to reference cells at the new position
-  if (structure.type === 'table' && 'cellIds' in structure) {
-    const tableStructure = structure as TableStructure
-    const newCellIds: (string | null)[][] = []
-    
-    // Create new cellIds array with updated cell references
-    for (let row = 0; row < tableStructure.dimensions.rows; row++) {
-      const rowCells: (string | null)[] = []
-      for (let col = 0; col < tableStructure.dimensions.cols; col++) {
-        const newRow = targetPosition.row + row
-        const newCol = targetPosition.col + col
-        
-        if (isValidPosition(newRow, newCol)) {
-          // Get the original cell value
-          const originalCellId = tableStructure.cellIds[row]?.[col]
-          const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
-          const originalValue = originalCell?.value || ''
-          
-          // Always clean up any existing structures at target position to prevent overlapping
-          const existingValue = getCellValue(newRow, newCol, newStructures, newPositions)
-          const existingStructures = getStructuresAtPosition(newRow, newCol, newPositions, newStructures)
-          
-          // Remove all existing structures at this position and update parent structures
-          for (const existingStructure of existingStructures) {
-            // If removing a cell structure, check if it's part of a table/array and update references
-            if (existingStructure.type === 'cell') {
-              // Find and update any tables that reference this cell
-              for (const [tableId, tableStructure] of newStructures) {
-                if (tableStructure.type === 'table' && 'cellIds' in tableStructure) {
-                  const table = tableStructure as TableStructure
-                  let updated = false
-                  for (let tRow = 0; tRow < table.cellIds.length; tRow++) {
-                    for (let tCol = 0; tCol < table.cellIds[tRow].length; tCol++) {
-                      if (table.cellIds[tRow][tCol] === existingStructure.id) {
-                        table.cellIds[tRow][tCol] = null
-                        updated = true
-                      }
-                    }
-                  }
-                  if (updated) {
-                    newStructures.set(tableId, { ...table })
-                  }
-                }
-                // Also check arrays
-                if (tableStructure.type === 'array' && 'cellIds' in tableStructure) {
-                  const array = tableStructure as ArrayStructure
-                  let updated = false
-                  for (let i = 0; i < array.cellIds.length; i++) {
-                    if (array.cellIds[i] === existingStructure.id) {
-                      array.cellIds[i] = null
-                      updated = true
-                    }
-                  }
-                  if (updated) {
-                    newStructures.set(tableId, { ...array })
-                  }
-                }
-              }
-            }
-            
-            newStructures.delete(existingStructure.id)
-            newPositions = removeStructureFromPositionMap(existingStructure, newPositions)
-          }
-          
-          // Determine final value based on merge strategy
-          let finalValue = originalValue
-          if (!overwriteExisting && existingValue && originalValue) {
-            finalValue = existingValue // Keep existing when not overwriting
-          } else if (existingValue && !originalValue) {
-            finalValue = existingValue // Keep existing if no new value
-          } else {
-            finalValue = originalValue // Use new value (overwrite or no conflict)
-          }
-          
-          // Create new cell structure at target position if there's a value
-          if (finalValue) {
-            const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
-            const newCell: CellStructure = {
-              type: 'cell',
-              id: newCellId,
-              startPosition: { row: newRow, col: newCol },
-              dimensions: { rows: 1, cols: 1 },
-              value: finalValue
-            }
-            newStructures.set(newCellId, newCell)
-            newPositions = addStructureToPositionMap(newCell, newPositions)
-            rowCells.push(newCellId)
-          } else {
-            rowCells.push(null)
-          }
-        } else {
-          rowCells.push(null)
-        }
-      }
-      newCellIds.push(rowCells)
-    }
-    
-    // Update the table structure with new cellIds
-    (movedStructure as TableStructure).cellIds = newCellIds
-  } else if (structure.type === 'array' && 'cellIds' in structure) {
-    const arrayStructure = structure as ArrayStructure
-    const newCellIds: (string | null)[] = []
-    
-    // Create new cellIds array with updated cell references
-    const size = arrayStructure.direction === 'horizontal' ? arrayStructure.dimensions.cols : arrayStructure.dimensions.rows
-    
-    for (let i = 0; i < size; i++) {
-      let newRow, newCol
-      if (arrayStructure.direction === 'horizontal') {
-        newRow = targetPosition.row
-        newCol = targetPosition.col + i
-      } else {
-        newRow = targetPosition.row + i
-        newCol = targetPosition.col
-      }
-      
-      if (isValidPosition(newRow, newCol)) {
-        // Get the original cell value
-        const originalCellId = arrayStructure.cellIds[i]
-        const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
-        const originalValue = originalCell?.value || ''
-        
-        // Always clean up any existing structures at target position to prevent overlapping
-        const existingValue = getCellValue(newRow, newCol, newStructures, newPositions)
-        const existingStructures = getStructuresAtPosition(newRow, newCol, newPositions, newStructures)
-        
-        // Remove all existing structures at this position and update parent structures
-        for (const existingStructure of existingStructures) {
-          // If removing a cell structure, check if it's part of a table/array and update references
-          if (existingStructure.type === 'cell') {
-            // Find and update any tables that reference this cell
-            for (const [tableId, tableStructure] of newStructures) {
-              if (tableStructure.type === 'table' && 'cellIds' in tableStructure) {
-                const table = tableStructure as TableStructure
-                let updated = false
-                for (let tRow = 0; tRow < table.cellIds.length; tRow++) {
-                  for (let tCol = 0; tCol < table.cellIds[tRow].length; tCol++) {
-                    if (table.cellIds[tRow][tCol] === existingStructure.id) {
-                      table.cellIds[tRow][tCol] = null
-                      updated = true
-                    }
-                  }
-                }
-                if (updated) {
-                  newStructures.set(tableId, { ...table })
-                }
-              }
-              // Also check arrays
-              if (tableStructure.type === 'array' && 'cellIds' in tableStructure) {
-                const array = tableStructure as ArrayStructure
-                let updated = false
-                for (let i = 0; i < array.cellIds.length; i++) {
-                  if (array.cellIds[i] === existingStructure.id) {
-                    array.cellIds[i] = null
-                    updated = true
-                  }
-                }
-                if (updated) {
-                  newStructures.set(tableId, { ...array })
-                }
-              }
-            }
-          }
-          
-          newStructures.delete(existingStructure.id)
-          newPositions = removeStructureFromPositionMap(existingStructure, newPositions)
-        }
-        
-        // Determine final value based on merge strategy
-        let finalValue = originalValue
-        if (!overwriteExisting && existingValue && originalValue) {
-          finalValue = existingValue // Keep existing when not overwriting
-        } else if (existingValue && !originalValue) {
-          finalValue = existingValue // Keep existing if no new value
-        } else {
-          finalValue = originalValue // Use new value (overwrite or no conflict)
-        }
-        
-        // Create new cell structure at target position if there was an original cell (preserve cell structure even if empty)
-        if (originalCell || finalValue) {
-          const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
-          const newCell: CellStructure = {
-            type: 'cell',
-            id: newCellId,
-            startPosition: { row: newRow, col: newCol },
-            dimensions: { rows: 1, cols: 1 },
-            value: finalValue
-          }
-          newStructures.set(newCellId, newCell)
-          newPositions = addStructureToPositionMap(newCell, newPositions)
-          newCellIds.push(newCellId)
-        } else {
-          newCellIds.push(null)
-        }
-      } else {
-        newCellIds.push(null)
-      }
-    }
-    
-    // Update the array structure with new cellIds
-    (movedStructure as ArrayStructure).cellIds = newCellIds
-  }
-  
-  // For templates, move all internal structures to their new positions
-  if (structure.type === 'template' && templateInternalStructures.length > 0) {
-    const deltaRow = targetPosition.row - structure.startPosition.row
-    const deltaCol = targetPosition.col - structure.startPosition.col
-    
-    for (const internalStructure of templateInternalStructures) {
-      // Calculate new position for each internal structure
-      const newInternalPosition: Position = {
-        row: internalStructure.startPosition.row + deltaRow,
-        col: internalStructure.startPosition.col + deltaCol
-      }
-      
-      // Create moved version of the internal structure
-      const movedInternalStructure: Structure = {
-        ...internalStructure,
-        startPosition: newInternalPosition
-      }
-      
-      // If the internal structure is a table or array, we need to update its cellIds
-      if ((internalStructure.type === 'table' || internalStructure.type === 'array') && 'cellIds' in internalStructure) {
-        if (internalStructure.type === 'table') {
-          const tableStructure = internalStructure as TableStructure
-          const newCellIds: (string | null)[][] = []
-          
-          for (let row = 0; row < tableStructure.dimensions.rows; row++) {
-            const rowCells: (string | null)[] = []
-            for (let col = 0; col < tableStructure.dimensions.cols; col++) {
-              const newRow = newInternalPosition.row + row
-              const newCol = newInternalPosition.col + col
-              
-              if (isValidPosition(newRow, newCol)) {
-                // Get the original cell value
-                const originalCellId = tableStructure.cellIds[row]?.[col]
-                const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
-                const originalValue = originalCell?.value || ''
-                
-                // Create new cell structure at target position if there's a value
-                if (originalValue) {
-                  const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
-                  const newCell: CellStructure = {
-                    type: 'cell',
-                    id: newCellId,
-                    startPosition: { row: newRow, col: newCol },
-                    dimensions: { rows: 1, cols: 1 },
-                    value: originalValue
-                  }
-                  newStructures.set(newCellId, newCell)
-                  newPositions = addStructureToPositionMap(newCell, newPositions)
-                  rowCells.push(newCellId)
-                } else {
-                  rowCells.push(null)
-                }
-              } else {
-                rowCells.push(null)
-              }
-            }
-            newCellIds.push(rowCells)
-          }
-          
-          // Update the table structure with new cellIds
-          (movedInternalStructure as TableStructure).cellIds = newCellIds
-        } else if (internalStructure.type === 'array') {
-          const arrayStructure = internalStructure as ArrayStructure
-          const newCellIds: (string | null)[] = []
-          
-          const size = arrayStructure.direction === 'horizontal' ? arrayStructure.dimensions.cols : arrayStructure.dimensions.rows
-          
-          for (let i = 0; i < size; i++) {
-            let newRow, newCol
-            if (arrayStructure.direction === 'horizontal') {
-              newRow = newInternalPosition.row
-              newCol = newInternalPosition.col + i
-            } else {
-              newRow = newInternalPosition.row + i
-              newCol = newInternalPosition.col
-            }
-            
-            if (isValidPosition(newRow, newCol)) {
-              // Get the original cell value
-              const originalCellId = arrayStructure.cellIds[i]
-              const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
-              const originalValue = originalCell?.value || ''
-              
-              // Create new cell structure at target position if there was an original cell
-              if (originalCell || originalValue) {
-                const newCellId = `cell-${newRow}-${newCol}-${Date.now()}`
-                const newCell: CellStructure = {
-                  type: 'cell',
-                  id: newCellId,
-                  startPosition: { row: newRow, col: newCol },
-                  dimensions: { rows: 1, cols: 1 },
-                  value: originalValue
-                }
-                newStructures.set(newCellId, newCell)
-                newPositions = addStructureToPositionMap(newCell, newPositions)
-                newCellIds.push(newCellId)
-              } else {
-                newCellIds.push(null)
-              }
-            } else {
-              newCellIds.push(null)
-            }
-          }
-          
-          // Update the array structure with new cellIds
-          (movedInternalStructure as ArrayStructure).cellIds = newCellIds
-        }
-      }
-      
-      // Add the moved internal structure to the new structures map and position map
-      newStructures.set(movedInternalStructure.id, movedInternalStructure)
-      newPositions = addStructureToPositionMap(movedInternalStructure, newPositions)
-    }
-  }
-
-  // Update the moved structure in the structures map
-  newStructures.set(movedStructure.id, movedStructure)
-  
-  // Add the moved structure to the new position in the position map
-  newPositions = addStructureToPositionMap(movedStructure, newPositions)
-  
-  return { structures: newStructures, positions: newPositions }
+  // Use the new recursive move function
+  return moveStructureRecursively(structure, targetPosition, structures, positions, overwriteExisting)
 }
 
-// Initialize cellIds array based on existing structures in a range
+// Initialize itemIds array based on existing structures in a range
 export const initializeCellIdsFromRange = (
   startPosition: Position,
   dimensions: Dimensions,
@@ -1023,7 +1060,7 @@ export const initializeCellIdsFromRange = (
   structureType: 'array' | 'table'
 ): (string | null)[] | (string | null)[][] => {
   if (structureType === 'array') {
-    const cellIds: (string | null)[] = []
+    const itemIds: (string | null)[] = []
     const size = dimensions.rows === 1 ? dimensions.cols : dimensions.rows
     
     for (let i = 0; i < size; i++) {
@@ -1039,13 +1076,13 @@ export const initializeCellIdsFromRange = (
       }
       
       const existingStructure = getStructureAtPosition(row, col, positions, structures)
-      cellIds.push(existingStructure ? existingStructure.id : null)
+      itemIds.push(existingStructure ? existingStructure.id : null)
     }
     
-    return cellIds
+    return itemIds
   } else {
     // Table: 2D array
-    const cellIds: (string | null)[][] = []
+    const itemIds: (string | null)[][] = []
     
     for (let row = 0; row < dimensions.rows; row++) {
       const rowArray: (string | null)[] = []
@@ -1056,9 +1093,532 @@ export const initializeCellIdsFromRange = (
         const existingStructure = getStructureAtPosition(gridRow, gridCol, positions, structures)
         rowArray.push(existingStructure ? existingStructure.id : null)
       }
-      cellIds.push(rowArray)
+      itemIds.push(rowArray)
     }
     
-    return cellIds
+    return itemIds
+  }
+}
+
+// =============================================================================
+// CENTRALIZED RECURSIVE STRUCTURE OPERATIONS
+// =============================================================================
+
+/**
+ * Recursively find all nested structures within a parent structure
+ */
+export const getAllNestedStructures = (
+  parentStructure: Structure,
+  structures: StructureMap,
+  positions: PositionMap,
+  visited: Set<string> = new Set()
+): Structure[] => {
+  const nestedStructures: Structure[] = []
+  
+  // Prevent infinite recursion
+  if (visited.has(parentStructure.id)) {
+    return nestedStructures
+  }
+  visited.add(parentStructure.id)
+  
+  const { startPosition, dimensions } = parentStructure
+  const endPosition = getEndPosition(startPosition, dimensions)
+  
+  // Find all structures that are within the parent bounds (but not the parent itself)
+  for (let row = startPosition.row; row <= endPosition.row; row++) {
+    for (let col = startPosition.col; col <= endPosition.col; col++) {
+      const structuresAtPosition = getStructuresAtPosition(row, col, positions, structures)
+      
+      for (const structure of structuresAtPosition) {
+        if (structure.id !== parentStructure.id && 
+            !nestedStructures.some(existing => existing.id === structure.id)) {
+          
+          // Check if this structure is completely within the parent bounds
+          const structEnd = getEndPosition(structure.startPosition, structure.dimensions)
+          if (structure.startPosition.row >= startPosition.row &&
+              structure.startPosition.col >= startPosition.col &&
+              structEnd.row <= endPosition.row &&
+              structEnd.col <= endPosition.col) {
+            
+            nestedStructures.push(structure)
+            
+            // Recursively find nested structures within this structure
+            const deeperNested = getAllNestedStructures(structure, structures, positions, visited)
+            for (const deepNested of deeperNested) {
+              if (!nestedStructures.some(existing => existing.id === deepNested.id)) {
+                nestedStructures.push(deepNested)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  return nestedStructures
+}
+
+/**
+ * Get structures directly referenced by a parent structure (via itemIds)
+ */
+export const getDirectlyReferencedStructures = (
+  parentStructure: Structure,
+  structures: StructureMap
+): Structure[] => {
+  const referencedStructures: Structure[] = []
+  
+  if (parentStructure.type === 'table' && 'itemIds' in parentStructure) {
+    const table = parentStructure as TableStructure
+    for (const row of table.itemIds) {
+      for (const itemId of row) {
+        if (itemId) {
+          const structure = structures.get(itemId)
+          if (structure && !referencedStructures.some(existing => existing.id === structure.id)) {
+            referencedStructures.push(structure)
+          }
+        }
+      }
+    }
+  } else if (parentStructure.type === 'array' && 'itemIds' in parentStructure) {
+    const array = parentStructure as ArrayStructure
+    for (const itemId of array.itemIds) {
+      if (itemId) {
+        const structure = structures.get(itemId)
+        if (structure && !referencedStructures.some(existing => existing.id === structure.id)) {
+          referencedStructures.push(structure)
+        }
+      }
+    }
+  }
+  
+  return referencedStructures
+}
+
+/**
+ * Calculate position delta between old and new positions
+ */
+export const calculatePositionDelta = (
+  oldPosition: Position,
+  newPosition: Position
+): { deltaRow: number, deltaCol: number } => {
+  return {
+    deltaRow: newPosition.row - oldPosition.row,
+    deltaCol: newPosition.col - oldPosition.col
+  }
+}
+
+/**
+ * Apply position delta to a structure
+ */
+export const applyPositionDelta = (
+  structure: Structure,
+  deltaRow: number,
+  deltaCol: number
+): Structure => {
+  return {
+    ...structure,
+    startPosition: {
+      row: structure.startPosition.row + deltaRow,
+      col: structure.startPosition.col + deltaCol
+    }
+  }
+}
+
+/**
+ * Recursively move a structure and all its nested structures
+ */
+export const moveStructureRecursively = (
+  structure: Structure,
+  targetPosition: Position,
+  structures: StructureMap,
+  positions: PositionMap,
+  overwriteExisting: boolean = false
+): { structures: StructureMap, positions: PositionMap } => {
+  const { deltaRow, deltaCol } = calculatePositionDelta(structure.startPosition, targetPosition)
+  
+  let newStructures = new Map(structures)
+  let newPositions = new Map(positions)
+  
+  // Step 1: Collect all structures that need to be moved (parent + all nested)
+  const nestedStructures = getAllNestedStructures(structure, structures, positions)
+  const directlyReferenced = getDirectlyReferencedStructures(structure, structures)
+  
+  // Combine all structures that need to be moved
+  const allStructuresToMove = [
+    structure,
+    ...nestedStructures,
+    ...directlyReferenced.filter(ref => !nestedStructures.some(nested => nested.id === ref.id))
+  ]
+  
+  // Step 2: Remove all structures from their current positions
+  for (const structureToMove of allStructuresToMove) {
+    newStructures.delete(structureToMove.id)
+    newPositions = removeStructureFromPositionMap(structureToMove, newPositions)
+  }
+  
+  // Step 3: Clear existing structures at target positions if overwriting
+  if (overwriteExisting) {
+    const mainEndPosition = getEndPosition(targetPosition, structure.dimensions)
+    for (let row = targetPosition.row; row <= mainEndPosition.row; row++) {
+      for (let col = targetPosition.col; col <= mainEndPosition.col; col++) {
+        const existingStructures = getStructuresAtPosition(row, col, newPositions, newStructures)
+        for (const existingStructure of existingStructures) {
+          if (!allStructuresToMove.some(moving => moving.id === existingStructure.id)) {
+            newStructures.delete(existingStructure.id)
+            newPositions = removeStructureFromPositionMap(existingStructure, newPositions)
+          }
+        }
+      }
+    }
+  }
+  
+  // Step 4: Move all structures to their new positions
+  const movedStructures = new Map<string, Structure>()
+  
+  for (const structureToMove of allStructuresToMove) {
+    const movedStructure = applyPositionDelta(structureToMove, deltaRow, deltaCol)
+    movedStructures.set(structureToMove.id, movedStructure)
+  }
+  
+  // Step 5: Update itemIds references for tables and arrays
+  for (const [structureId, movedStructure] of movedStructures) {
+    if (movedStructure.type === 'table' && 'itemIds' in movedStructure) {
+      const table = movedStructure as TableStructure
+      const newItemIds: (string | null)[][] = []
+      
+      for (let row = 0; row < table.dimensions.rows; row++) {
+        const rowCells: (string | null)[] = []
+        for (let col = 0; col < table.dimensions.cols; col++) {
+          const newRow = table.startPosition.row + row
+          const newCol = table.startPosition.col + col
+          
+          if (isValidPosition(newRow, newCol)) {
+            // Get the original cell value if it exists
+            const originalCellId = (structure as TableStructure).itemIds?.[row]?.[col]
+            const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
+            const originalValue = originalCell?.value || ''
+            
+            // Create new cell structure at target position if there's a value
+            if (originalValue || originalCell) {
+              const newCellId = `cell-${newRow}-${newCol}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+              const newCell: CellStructure = {
+                type: 'cell',
+                id: newCellId,
+                startPosition: { row: newRow, col: newCol },
+                dimensions: { rows: 1, cols: 1 },
+                value: originalValue
+              }
+              movedStructures.set(newCellId, newCell)
+              rowCells.push(newCellId)
+            } else {
+              rowCells.push(null)
+            }
+          } else {
+            rowCells.push(null)
+          }
+        }
+        newItemIds.push(rowCells)
+      }
+      
+      // Update the table structure with new itemIds
+      movedStructures.set(structureId, { ...movedStructure, itemIds: newItemIds } as TableStructure)
+      
+    } else if (movedStructure.type === 'array' && 'itemIds' in movedStructure) {
+      const array = movedStructure as ArrayStructure
+      const newItemIds: (string | null)[] = []
+      
+      if (array.contentType === 'cells') {
+        // Handle cell arrays
+        const size = array.direction === 'horizontal' ? array.dimensions.cols : array.dimensions.rows
+        
+        for (let i = 0; i < size; i++) {
+          let newRow, newCol
+          if (array.direction === 'horizontal') {
+            newRow = array.startPosition.row
+            newCol = array.startPosition.col + i
+          } else {
+            newRow = array.startPosition.row + i
+            newCol = array.startPosition.col
+          }
+          
+          if (isValidPosition(newRow, newCol)) {
+            // Get the original cell value if it exists
+            const originalCellId = (structure as ArrayStructure).itemIds?.[i]
+            const originalCell = originalCellId ? structures.get(originalCellId) as CellStructure : null
+            const originalValue = originalCell?.value || ''
+            
+            // Create new cell structure at target position if there was an original cell
+            if (originalCell || originalValue) {
+              const newCellId = `cell-${newRow}-${newCol}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+              const newCell: CellStructure = {
+                type: 'cell',
+                id: newCellId,
+                startPosition: { row: newRow, col: newCol },
+                dimensions: { rows: 1, cols: 1 },
+                value: originalValue
+              }
+              movedStructures.set(newCellId, newCell)
+              newItemIds.push(newCellId)
+            } else {
+              newItemIds.push(null)
+            }
+          } else {
+            newItemIds.push(null)
+          }
+        }
+      } else {
+        // Handle template arrays - itemIds should reference the moved template instances
+        for (const originalItemId of array.itemIds) {
+          if (originalItemId && movedStructures.has(originalItemId)) {
+            newItemIds.push(originalItemId) // Reference stays the same, just position changed
+          } else {
+            newItemIds.push(null)
+          }
+        }
+      }
+      
+      // Update the array structure with new itemIds
+      movedStructures.set(structureId, { ...movedStructure, itemIds: newItemIds } as ArrayStructure)
+    }
+  }
+  
+  // Step 6: Add all moved structures to the new maps
+  for (const [structureId, movedStructure] of movedStructures) {
+    newStructures.set(structureId, movedStructure)
+    newPositions = addStructureToPositionMap(movedStructure, newPositions)
+  }
+  
+  return { structures: newStructures, positions: newPositions }
+}
+
+// =============================================================================
+// HIERARCHY DETECTION AND SELECTION UTILITIES
+// =============================================================================
+
+/**
+ * Get all structures at a position ordered by containment hierarchy (outermost to innermost)
+ */
+export const getStructureHierarchy = (
+  row: number, 
+  col: number, 
+  positions: PositionMap, 
+  structures: StructureMap
+): Structure[] => {
+  const structuresAtPosition = getStructuresAtPosition(row, col, positions, structures)
+  
+  if (structuresAtPosition.length <= 1) {
+    return structuresAtPosition
+  }
+  
+  return sortStructuresByContainment(structuresAtPosition)
+}
+
+/**
+ * Sort structures by containment hierarchy (outermost to innermost)
+ * Uses area size, position, and structure type to determine hierarchy
+ */
+export const sortStructuresByContainment = (structures: Structure[]): Structure[] => {
+  return structures.sort((a, b) => {
+    // Calculate areas
+    const areaA = a.dimensions.rows * a.dimensions.cols
+    const areaB = b.dimensions.rows * b.dimensions.cols
+    
+    // Primary sort: larger structures (by area) come first (outermost)
+    if (areaA !== areaB) {
+      return areaB - areaA
+    }
+    
+    // Secondary sort: if same area, use position (top-left comes first)
+    const positionCompare = (a.startPosition.row - b.startPosition.row) || (a.startPosition.col - b.startPosition.col)
+    if (positionCompare !== 0) {
+      return positionCompare
+    }
+    
+    // Tertiary sort: use structure type hierarchy (template > array > table > cell)
+    const typeOrder = { template: 0, array: 1, table: 2, cell: 3 }
+    const typeA = typeOrder[a.type as keyof typeof typeOrder] ?? 4
+    const typeB = typeOrder[b.type as keyof typeof typeOrder] ?? 4
+    
+    return typeA - typeB
+  })
+}
+
+/**
+ * Check if one structure completely contains another
+ */
+export const isStructureContainedIn = (inner: Structure, outer: Structure): boolean => {
+  const innerEnd = getEndPosition(inner.startPosition, inner.dimensions)
+  const outerEnd = getEndPosition(outer.startPosition, outer.dimensions)
+  
+  return (
+    inner.startPosition.row >= outer.startPosition.row &&
+    inner.startPosition.col >= outer.startPosition.col &&
+    innerEnd.row <= outerEnd.row &&
+    innerEnd.col <= outerEnd.col &&
+    inner.id !== outer.id
+  )
+}
+
+/**
+ * Get the next structure in the hierarchy when clicking repeatedly on the same position
+ */
+export const getNextStructureInHierarchy = (
+  currentStructure: Structure | null,
+  hierarchy: Structure[],
+  currentLevel: number
+): { structure: Structure | null, level: number } => {
+  if (hierarchy.length === 0) {
+    return { structure: null, level: 0 }
+  }
+  
+  // If no current structure or not in hierarchy, start at level 0
+  if (!currentStructure || !hierarchy.some(s => s.id === currentStructure.id)) {
+    return { structure: hierarchy[0], level: 0 }
+  }
+  
+  // Find current structure index in hierarchy
+  const currentIndex = hierarchy.findIndex(s => s.id === currentStructure.id)
+  
+  // If current structure is in hierarchy, advance to next level
+  if (currentIndex !== -1) {
+    const nextLevel = currentLevel + 1
+    
+    // If we've reached the end, cycle back to the beginning
+    if (nextLevel >= hierarchy.length) {
+      return { structure: hierarchy[0], level: 0 }
+    }
+    
+    return { structure: hierarchy[nextLevel], level: nextLevel }
+  }
+  
+  // Fallback: start at level 0
+  return { structure: hierarchy[0], level: 0 }
+}
+
+/**
+ * Check if two positions are the same
+ */
+export const isSamePosition = (pos1: Position | null, pos2: Position | null): boolean => {
+  if (!pos1 || !pos2) return false
+  return pos1.row === pos2.row && pos1.col === pos2.col
+}
+
+// =============================================================================
+// TEMPLATE ARRAY UTILITIES
+// =============================================================================
+
+/**
+ * Calculate array dimensions when containing templates
+ */
+export const calculateArrayDimensionsWithTemplate = (
+  array: ArrayStructure,
+  templateDimensions: { rows: number, cols: number },
+  instanceCount: number = 1
+): Dimensions => {
+  if (array.direction === 'horizontal') {
+    return {
+      rows: templateDimensions.rows,
+      cols: templateDimensions.cols * instanceCount
+    }
+  } else {
+    return {
+      rows: templateDimensions.rows * instanceCount,
+      cols: templateDimensions.cols
+    }
+  }
+}
+
+/**
+ * Calculate position for a template instance within an array
+ */
+export const calculateTemplateInstancePosition = (
+  arrayStartPosition: Position,
+  arrayDirection: 'horizontal' | 'vertical',
+  templateDimensions: { rows: number, cols: number },
+  instanceIndex: number
+): Position => {
+  if (arrayDirection === 'horizontal') {
+    return {
+      row: arrayStartPosition.row,
+      col: arrayStartPosition.col + (templateDimensions.cols * instanceIndex)
+    }
+  } else {
+    return {
+      row: arrayStartPosition.row + (templateDimensions.rows * instanceIndex),
+      col: arrayStartPosition.col
+    }
+  }
+}
+
+/**
+ * Get template dimensions from template storage
+ * Note: This function will need to be called with templateStructures passed as parameter
+ * to avoid circular dependency issues
+ */
+export const getTemplateDimensionsFromStructures = (
+  templateStructures: Map<string, Structure>
+): { rows: number, cols: number } => {
+  if (!templateStructures || templateStructures.size === 0) {
+    // Default dimensions if template not found
+    return { rows: 2, cols: 2 }
+  }
+  
+  // Calculate bounding box of all structures in the template
+  let minRow = Infinity, maxRow = -Infinity
+  let minCol = Infinity, maxCol = -Infinity
+  
+  for (const [, structure] of templateStructures) {
+    const endPos = getEndPosition(structure.startPosition, structure.dimensions)
+    
+    minRow = Math.min(minRow, structure.startPosition.row)
+    maxRow = Math.max(maxRow, endPos.row)
+    minCol = Math.min(minCol, structure.startPosition.col)
+    maxCol = Math.max(maxCol, endPos.col)
+  }
+  
+  return {
+    rows: maxRow - minRow + 1,
+    cols: maxCol - minCol + 1
+  }
+}
+
+/**
+ * Check if an array contains templates
+ */
+export const isTemplateArray = (array: ArrayStructure): boolean => {
+  return array.contentType !== 'cells' && array.templateDimensions != null
+}
+
+/**
+ * Get the number of template instances that can fit in an array's current dimensions
+ */
+export const getTemplateInstanceCount = (
+  array: ArrayStructure,
+  templateDimensions: { rows: number, cols: number }
+): number => {
+  if (array.direction === 'horizontal') {
+    return Math.floor(array.dimensions.cols / templateDimensions.cols)
+  } else {
+    return Math.floor(array.dimensions.rows / templateDimensions.rows)
+  }
+}
+
+/**
+ * Calculate the expansion needed to add another template instance
+ */
+export const calculateTemplateArrayExpansion = (
+  array: ArrayStructure,
+  templateDimensions: { rows: number, cols: number }
+): { direction: 'left' | 'right' | 'up' | 'down', amount: number } => {
+  if (array.direction === 'horizontal') {
+    return {
+      direction: 'right',
+      amount: templateDimensions.cols
+    }
+  } else {
+    return {
+      direction: 'down',
+      amount: templateDimensions.rows
+    }
   }
 }

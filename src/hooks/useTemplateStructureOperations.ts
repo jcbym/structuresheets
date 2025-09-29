@@ -50,7 +50,8 @@ export const useTemplateStructureOperations = (
           dimensions: dimensions,
           name,
           direction,
-          cellIds: arrayCellIds
+          contentType: 'cells', // Default to cells for backward compatibility
+          itemIds: arrayCellIds
         }
         return newStructure
 
@@ -67,7 +68,7 @@ export const useTemplateStructureOperations = (
           name,
           colHeaderLevels: 1,
           rowHeaderLevels: 0,
-          cellIds: tableCellIds
+          itemIds: tableCellIds
         }
         return newStructure
     }
@@ -166,22 +167,19 @@ export const useTemplateStructureOperations = (
         updatedStructure = {
           ...structure,
           formula: formula || undefined,
-          formulaError: undefined,
-          formulaValue: undefined
+          formulaError: undefined
         } as CellStructure;
       } else if (structure.type === 'array') {
         updatedStructure = {
           ...structure,
           formula: formula || undefined,
-          formulaError: undefined,
-          formulaValue: undefined
+          formulaError: undefined
         } as ArrayStructure;
       } else if (structure.type === 'table') {
         updatedStructure = {
           ...structure,
           formula: formula || undefined,
-          formulaError: undefined,
-          formulaValue: undefined
+          formulaError: undefined
         } as TableStructure;
       } else {
         return newStructures;

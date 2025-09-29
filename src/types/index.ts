@@ -17,7 +17,6 @@ export interface BaseStructure {
   name?: string
 
   formula?: string
-  formulaValue?: string
   formulaError?: string
 }
 
@@ -31,14 +30,19 @@ export interface ArrayStructure extends BaseStructure {
   type: 'array'
 
   direction: 'horizontal' | 'vertical'
-  cellIds: (string | null)[] // Array of cell IDs, null for empty cells
+  contentType: 'cells' | string // string for template IDs
+  itemIds: (string | null)[] // Array of IDs, null for empty cells
+  
+  // Template-specific properties
+  templateDimensions?: { rows: number, cols: number } // Dimensions of each template instance
+  instanceCount?: number // Number of template instances in the array
 }
 
 export interface TableStructure extends BaseStructure {
   type: 'table'
 
   // Values
-  cellIds: (string | null)[][] // 2D array of cell IDs, null for empty cells
+  itemIds: (string | null)[][] // 2D array of cell IDs, null for empty cells
 
   // Column and row headers
   colHeaderLevels: number
@@ -116,6 +120,8 @@ export type StructurePanelProps = {
   onToggleTableColumns: (tableKey: string) => void
   onUpdateStructureName: (structureId: string, name: string) => void
   onUpdateStructureFormula: (structureId: string, formula: string) => void
+  onUpdateArrayContentType: (arrayId: string, contentType: string) => void
+  availableTemplates: Array<{id: string, name: string}>
   isCollapsed: boolean
   width: number
   onToggleCollapse: () => void

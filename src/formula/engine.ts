@@ -1,6 +1,6 @@
 // Simplified formula engine for StructureSheets
 import { FormulaValue, formulaNumber, formulaString, formulaError, emptyCell, NUMBER, STRING, ERROR, EMPTY, BOOLEAN } from './types';
-import { Structure, StructureMap, PositionMap } from '../types';
+import { Structure, StructureMap, PositionMap, TableStructure, CellStructure } from '../types';
 import { getCellValue } from '../utils/structureUtils';
 
 // Dependency tracking types
@@ -23,7 +23,13 @@ export type StructureReference = {
   structureId: string;
 };
 
-export type Dependency = CellReference | RangeReference | StructureReference;
+export type TableColumnReference = {
+  type: 'tableColumn';
+  tableName: string;
+  columnName: string;
+};
+
+export type Dependency = CellReference | RangeReference | StructureReference | TableColumnReference;
 
 // Simple formula parser that handles basic expressions
 export class FormulaEngine {
@@ -104,6 +110,14 @@ export class FormulaEngine {
     const rangeMatch = expr.match(/^([A-Z]+\d+):([A-Z]+\d+)$/);
     if (rangeMatch) {
       return this.evaluateRangeReference(expr);
+    }
+
+    // Handle table column references (table[col] or table["col name"])
+    const tableColumnMatch = expr.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\[(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_]*))\]$/);
+    if (tableColumnMatch) {
+      const tableName = tableColumnMatch[1];
+      const columnName = tableColumnMatch[2] || tableColumnMatch[3]; // quoted or unquoted column name
+      return this.evaluateTableColumnReference(tableName, columnName);
     }
 
     // Handle structure name references
@@ -397,6 +411,68 @@ export class FormulaEngine {
         if (cellValue) {
           const numValue = parseFloat(cellValue);
           values.push(isNaN(numValue) ? cellValue : numValue);
+        }
+      }
+    }
+
+    return { kind: 'RANGE', value: values };
+  }
+
+  // Evaluate table column references like table[columnName]
+  private evaluateTableColumnReference(tableName: string, columnName: string): FormulaValue {
+    // Find the table structure by name
+    const tableStructure = this.getStructureByName(tableName);
+    if (!tableStructure) {
+      return formulaError(`Table '${tableName}' not found`);
+    }
+
+    if (tableStructure.type !== 'table') {
+      return formulaError(`'${tableName}' is not a table`);
+    }
+
+    const table = tableStructure as TableStructure;
+    
+    // Track this table column as a dependency
+    this.addDependency({
+      type: 'tableColumn',
+      tableName: tableName,
+      columnName: columnName
+    });
+
+    // Check if the table has column name mappings
+    if (!table.colNames || typeof table.colNames !== 'object') {
+      return formulaError(`Table '${tableName}' has no column definitions`);
+    }
+
+    // Find the column index by name
+    const columnIndex = table.colNames[columnName];
+    if (columnIndex === undefined) {
+      return formulaError(`Column '${columnName}' not found in table '${tableName}'`);
+    }
+
+    // Get the number of header rows to skip
+    const headerRows = table.colHeaderLevels || 0;
+    
+    // Extract values from the column (excluding headers)
+    const values: Array<number | string> = [];
+    
+    if (table.itemIds && Array.isArray(table.itemIds)) {
+      for (let rowIndex = headerRows; rowIndex < table.itemIds.length; rowIndex++) {
+        const row = table.itemIds[rowIndex];
+        if (row && columnIndex < row.length) {
+          const cellId = row[columnIndex];
+          if (cellId) {
+            // Get the cell structure and its value
+            const cellStructure = this.structures.get(cellId);
+            if (cellStructure && cellStructure.type === 'cell') {
+              const cell = cellStructure as CellStructure;
+              const cellValue = cell.value || '';
+              if (cellValue) {
+                const numValue = parseFloat(cellValue);
+                values.push(isNaN(numValue) ? cellValue : numValue);
+              }
+            }
+          }
         }
       }
     }

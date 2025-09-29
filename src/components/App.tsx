@@ -2,6 +2,7 @@ import React from 'react'
 import { SpreadsheetGrid } from './spreadsheet/SpreadsheetGrid'
 import { TemplateBoundary } from './spreadsheet/TemplateBoundary'
 import { Toolbar } from './ui/Toolbar'
+import { FormulaBar, FormulaBarRef } from './ui/FormulaBar'
 import { StructurePanel } from './ui/StructurePanel'
 import { ContextMenu } from './ui/ContextMenu'
 import { TemplatesSidebar } from './ui/TemplatesSidebar'
@@ -10,9 +11,12 @@ import { useCellOperations } from '../hooks/useCellOperations'
 import { useStructureOperations } from '../hooks/useStructureOperations'
 import { useTemplateOperations } from '../hooks/useTemplateOperations'
 import { useTemplateStructureOperations } from '../hooks/useTemplateStructureOperations'
+import { getCellValue, getStructureAtPosition } from '../utils/structureUtils'
+import { CellStructure } from '../types'
 
 export const App: React.FC = () => {
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const formulaBarRef = React.useRef<FormulaBarRef>(null)
   
   // Use custom hooks for state management
   const state = useSpreadsheetState()
@@ -22,9 +26,11 @@ export const App: React.FC = () => {
     updateTableHeaders,
     updateStructureName,
     updateStructureFormula,
+    updateArrayContentType,
     triggerRecalculation,
     rotateArray,
-    deleteStructure
+    deleteStructure,
+    dependencyManager
   } = useStructureOperations(
     state.structures,
     state.setStructures,
@@ -40,7 +46,8 @@ export const App: React.FC = () => {
     state.setStructures,
     state.positions,
     state.setPositions,
-    triggerRecalculation
+    triggerRecalculation,
+    dependencyManager
   )
 
   // Template cell operations - separate from main grid
@@ -96,11 +103,181 @@ export const App: React.FC = () => {
     state.setSelectedStructure
   )
 
+  // Formula bar helpers
+  const getCurrentCellInfo = React.useCallback(() => {
+    // If there's a selected structure, use its formula
+    if (state.selectedStructure) {
+      return {
+        cellValue: '', // Structures don't have a "value" in the same way cells do
+        cellFormula: state.selectedStructure.formula || ''
+      }
+    }
+
+    // Fall back to cell-based logic if no structure is selected
+    if (!state.selectedRange || state.selectedRange.start.row !== state.selectedRange.end.row || 
+        state.selectedRange.start.col !== state.selectedRange.end.col) {
+      return { cellValue: '', cellFormula: '' }
+    }
+
+    const { row, col } = state.selectedRange.start
+    const currentStructures = state.isEditingTemplate ? state.templateStructures : state.structures
+    const currentPositions = state.isEditingTemplate ? state.templatePositions : state.positions
+    
+    // Get cell structure if it exists
+    const cellStructure = getStructureAtPosition(row, col, currentPositions, currentStructures)
+    if (cellStructure && cellStructure.type === 'cell') {
+      const cell = cellStructure as CellStructure
+      return {
+        cellValue: cell.value || '',
+        cellFormula: cell.formula || ''
+      }
+    }
+
+    // Fall back to getting any value at this position
+    const cellValue = getCellValue(row, col, currentStructures, currentPositions)
+    return {
+      cellValue: cellValue || '',
+      cellFormula: ''
+    }
+  }, [state.selectedStructure, state.selectedRange, state.structures, state.positions, state.templateStructures, state.templatePositions, state.isEditingTemplate])
+
+  const handleFormulaChange = React.useCallback((formula: string) => {
+    state.setCurrentFormula(formula)
+  }, [state.setCurrentFormula])
+
+  const handleFormulaCommit = React.useCallback((formula: string) => {
+    // If there's a selected structure, update its formula (always, even if empty to allow clearing formulas)
+    if (state.selectedStructure) {
+      const currentUpdateStructureFormula = state.isEditingTemplate ? updateTemplateStructureFormula : updateStructureFormula
+      currentUpdateStructureFormula(state.selectedStructure.id, formula)
+      
+      // Clear current formula
+      state.setCurrentFormula('')
+      return
+    }
+
+    // Fall back to cell-based logic if no structure is selected
+    if (!state.selectedRange || state.selectedRange.start.row !== state.selectedRange.end.row || 
+        state.selectedRange.start.col !== state.selectedRange.end.col) {
+      return
+    }
+
+    // Only create/update a cell if the formula is not empty
+    if (formula.trim() !== '') {
+      const { row, col } = state.selectedRange.start
+      const currentUpdateCell = state.isEditingTemplate ? updateTemplateCell : updateCell
+      
+      // Update the cell with the new formula
+      currentUpdateCell(row, col, formula)
+    }
+    
+    // Clear current formula regardless
+    state.setCurrentFormula('')
+  }, [state.selectedStructure, state.selectedRange, updateCell, updateTemplateCell, updateStructureFormula, updateTemplateStructureFormula, state.isEditingTemplate, state.setCurrentFormula])
+
+  const handleGridClick = React.useCallback((row: number, col: number, structure?: any) => {
+    // If formula bar is focused, try to insert reference
+    if (state.isFormulaBarFocused && formulaBarRef.current) {
+      const inserted = formulaBarRef.current.handleGridClick(row, col, structure)
+      if (inserted) {
+        return true // Reference was inserted, stop processing
+      }
+    }
+    
+    // Normal cell selection logic would go here
+    // For now, just update selected range
+    state.setSelectedRange({ start: { row, col }, end: { row, col } })
+    return false // No reference was inserted
+  }, [state.isFormulaBarFocused, state.setSelectedRange])
+
+  // Track previous selected structure and range for auto-save
+  const prevSelectedStructureRef = React.useRef(state.selectedStructure)
+  const prevSelectedRangeRef = React.useRef(state.selectedRange)
+  
+  // Auto-save formula when structure selection changes
+  React.useEffect(() => {
+    const prevStructure = prevSelectedStructureRef.current
+    const currentStructure = state.selectedStructure
+    
+    // If structure changed and we have current formula content, save it to the previous structure
+    if (prevStructure !== currentStructure && state.currentFormula.trim() !== '') {
+      if (prevStructure) {
+        // Save to previous structure (always update structures, even with empty formulas to allow clearing)
+        const currentUpdateStructureFormula = state.isEditingTemplate ? updateTemplateStructureFormula : updateStructureFormula
+        currentUpdateStructureFormula(prevStructure.id, state.currentFormula)
+      } else if (!prevStructure && prevSelectedRangeRef.current && 
+                 prevSelectedRangeRef.current.start.row === prevSelectedRangeRef.current.end.row && 
+                 prevSelectedRangeRef.current.start.col === prevSelectedRangeRef.current.end.col) {
+        // Only create/update cell if formula is not empty (don't create cells for empty formulas)
+        const { row, col } = prevSelectedRangeRef.current.start
+        const currentUpdateCell = state.isEditingTemplate ? updateTemplateCell : updateCell
+        currentUpdateCell(row, col, state.currentFormula)
+      }
+      
+      // Clear the formula after saving
+      state.setCurrentFormula('')
+    }
+    
+    // Update the ref for next time
+    prevSelectedStructureRef.current = currentStructure
+  }, [state.selectedStructure, state.currentFormula, updateStructureFormula, updateTemplateStructureFormula, updateCell, updateTemplateCell, state.isEditingTemplate, state.setCurrentFormula])
+
+  // Auto-save formula when cell selection changes (but no structure selected)
+  React.useEffect(() => {
+    const prevRange = prevSelectedRangeRef.current
+    const currentRange = state.selectedRange
+    
+    // Only handle cell-to-cell transitions when no structure is selected
+    if (!state.selectedStructure && !prevSelectedStructureRef.current && state.currentFormula.trim() !== '') {
+      // Check if the range actually changed
+      const rangeChanged = !prevRange || !currentRange ||
+        prevRange.start.row !== currentRange.start.row ||
+        prevRange.start.col !== currentRange.start.col ||
+        prevRange.end.row !== currentRange.end.row ||
+        prevRange.end.col !== currentRange.end.col
+      
+      if (rangeChanged && prevRange && 
+          prevRange.start.row === prevRange.end.row && 
+          prevRange.start.col === prevRange.end.col) {
+        // Save to the previous cell
+        const { row, col } = prevRange.start
+        const currentUpdateCell = state.isEditingTemplate ? updateTemplateCell : updateCell
+        currentUpdateCell(row, col, state.currentFormula)
+        
+        // Clear the formula after saving
+        state.setCurrentFormula('')
+      }
+    }
+    
+    // Update the ref for next time
+    prevSelectedRangeRef.current = currentRange
+  }, [state.selectedRange, state.selectedStructure, state.currentFormula, updateCell, updateTemplateCell, state.isEditingTemplate, state.setCurrentFormula])
+
+  // Get current cell info for formula bar
+  const currentCellInfo = getCurrentCellInfo()
+
   return (
     <div className="flex flex-col h-screen">
       <Toolbar
         selectedRange={state.selectedRange}
         onCreateStructure={state.isEditingTemplate ? createTemplateStructureFromToolbar : createStructureFromToolbar}
+      />
+      
+      {/* Formula Bar */}
+      <FormulaBar
+        ref={formulaBarRef}
+        selectedCell={state.selectedRange && state.selectedRange.start.row === state.selectedRange.end.row && 
+                     state.selectedRange.start.col === state.selectedRange.end.col ? 
+                     state.selectedRange.start : null}
+        cellValue={currentCellInfo.cellValue}
+        cellFormula={currentCellInfo.cellFormula}
+        structures={state.isEditingTemplate ? state.templateStructures : state.structures}
+        positions={state.isEditingTemplate ? state.templatePositions : state.positions}
+        onFormulaChange={handleFormulaChange}
+        onFormulaCommit={handleFormulaCommit}
+        onCellFocus={(row, col) => state.setSelectedRange({ start: { row, col }, end: { row, col } })}
+        isFormulaBarFocused={state.isFormulaBarFocused}
+        onFormulaBarFocus={state.setIsFormulaBarFocused}
       />
       
       <div className="flex flex-1 overflow-hidden">
@@ -220,6 +397,10 @@ export const App: React.FC = () => {
                   setLastValidDropTarget={state.setLastValidDropTarget}
                   setShowConflictDialog={state.setShowConflictDialog}
                   setConflictDialogData={state.setConflictDialogData}
+                  selectedStructureLevel={state.selectedStructureLevel}
+                  lastClickedPosition={state.lastClickedPosition}
+                  setSelectedStructureLevel={state.setSelectedStructureLevel}
+                  setLastClickedPosition={state.setLastClickedPosition}
                   onCellUpdate={updateTemplateCell}
                   onDeleteStructure={deleteTemplateStructure}
                   containerRef={containerRef}
@@ -316,8 +497,13 @@ export const App: React.FC = () => {
                 setLastValidDropTarget={state.setLastValidDropTarget}
                 setShowConflictDialog={state.setShowConflictDialog}
                 setConflictDialogData={state.setConflictDialogData}
+                selectedStructureLevel={state.selectedStructureLevel}
+                lastClickedPosition={state.lastClickedPosition}
+                setSelectedStructureLevel={state.setSelectedStructureLevel}
+                setLastClickedPosition={state.setLastClickedPosition}
                 onCellUpdate={updateCell}
                 onDeleteStructure={deleteStructure}
+                onGridClick={handleGridClick}
                 containerRef={containerRef}
               />
             </div>
@@ -333,6 +519,8 @@ export const App: React.FC = () => {
           onUpdateTableHeaders={updateTableHeaders}
           onUpdateStructureName={state.isEditingTemplate ? updateTemplateStructureName : updateStructureName}
           onUpdateStructureFormula={state.isEditingTemplate ? updateTemplateStructureFormula : updateStructureFormula}
+          onUpdateArrayContentType={updateArrayContentType}
+          availableTemplates={state.templates.map(t => ({ id: t.id, name: t.name }))}
           onSelectColumn={(tableId, columnIndex) => {
             state.setSelectedColumn({ tableId, columnIndex })
             // Also select the table structure when a column is selected
